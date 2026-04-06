@@ -85,14 +85,8 @@ def _handle_check(args: argparse.Namespace) -> int:
             sys.stderr.write(f"Error: path does not exist: {p}\n")
             return 2
 
-    result = check(paths, src_roots=src_roots, exclude=exclude, fix=args.fix)
-
-    if isinstance(result, tuple):
-        check_result, fix_result = result
-        _output_text(check_result, fix_result)
-    else:
-        check_result = result
-        _output_text(check_result)
+    check_result, fix_result = check(paths, src_roots=src_roots, exclude=exclude, fix=args.fix)
+    _output_text(check_result, fix_result)
 
     return 1 if check_result.violations else 0
 

@@ -71,7 +71,7 @@ class TestThirdPartyResolution:
         # Import from a stdlib module with re-exports
         test_file.write_text("from os.path import exists")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # This may or may not have violations depending on os.path's structure
         # Just verify it doesn't crash
         assert result.files_checked == 1

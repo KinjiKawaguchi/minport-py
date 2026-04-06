@@ -33,7 +33,7 @@ class TestViolationDetection:
         test_file = tmp_path / "test.py"
         test_file.write_text("from pkg.sub.module import Name")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Should detect that Name is available from pkg.sub
         assert len(result.violations) >= 1
         assert result.violations[0].shorter_path == "pkg.sub"
@@ -55,7 +55,7 @@ class TestViolationDetection:
         test_file = tmp_path / "test.py"
         test_file.write_text("from pkg.sub.deep.module import Name")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Should suggest shortest available path
         if result.violations:
             assert result.violations[0].shorter_path == "pkg"
@@ -69,7 +69,7 @@ class TestViolationDetection:
         test_file = tmp_path / "test.py"
         test_file.write_text("from pkg import Name")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Single-segment imports are not extracted, so no violations
         assert len(result.violations) == 0
 
@@ -82,7 +82,7 @@ class TestViolationDetection:
         test_file = tmp_path / "test.py"
         test_file.write_text("from pkg import Name")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Single-segment imports are not analyzed
         assert len(result.violations) == 0
 
@@ -100,7 +100,7 @@ class TestViolationDetection:
         test_file = tmp_path / "test.py"
         test_file.write_text("from pkg.sub.module import Name\nfrom pkg.sub.module import Other")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         assert len(result.violations) >= 2
         # Check line numbers are correct
         assert result.violations[0].line == 1
@@ -115,7 +115,7 @@ class TestViolationDetection:
         test_file = tmp_path / "test.py"
         test_file.write_text("import sys\nprint('hello')")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         assert len(result.violations) == 0
 
     def test_d7_alias_preserved_in_violation(self, tmp_path: Path) -> None:
@@ -132,7 +132,7 @@ class TestViolationDetection:
         test_file = tmp_path / "test.py"
         test_file.write_text("from pkg.sub.module import Name as MyName")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         if result.violations:
             assert result.violations[0].alias == "MyName"
 
@@ -151,7 +151,7 @@ class TestViolationDetection:
         test_file = tmp_path / "test.py"
         test_file.write_text("from pkg.sub.module import A, B")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Only A should be detected as a violation (A is re-exported from pkg.sub)
         a_violations = [v for v in result.violations if v.name == "A"]
         b_violations = [v for v in result.violations if v.name == "B"]
@@ -176,7 +176,7 @@ class TestViolationDetection:
         test_file = tmp_path / "test.py"
         test_file.write_text("from pkg.x.module import Name")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Should not report if ambiguous
         name_violations = [v for v in result.violations if v.name == "Name"]
         # The resolver should detect the conflict and not report it
@@ -188,7 +188,7 @@ class TestViolationDetection:
         test_file = tmp_path / "test.py"
         test_file.write_text("from __future__ import annotations")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         assert len(result.violations) == 0
 
     def test_files_checked_count(self, tmp_path: Path) -> None:
@@ -202,7 +202,7 @@ class TestViolationDetection:
         test2 = tmp_path / "test2.py"
         test2.write_text("import os")
 
-        result = check([test1, test2], src_roots=[tmp_path])
+        result, _ = check([test1, test2], src_roots=[tmp_path])
         assert result.files_checked == 2
 
     def test_infer_src_roots_from_directory(self, tmp_path: Path) -> None:
@@ -211,7 +211,7 @@ class TestViolationDetection:
         pkg.mkdir()
         (pkg / "__init__.py").write_text("")
 
-        result = check([pkg])
+        result, _ = check([pkg])
         assert result.files_checked == 1
 
     def test_suppress_comment_inline(self, tmp_path: Path) -> None:
@@ -228,7 +228,7 @@ class TestViolationDetection:
         test_file = tmp_path / "test.py"
         test_file.write_text("from pkg.sub.module import Name  # minport: ignore")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         assert len(result.violations) == 0
 
     def test_code_is_mp001(self, tmp_path: Path) -> None:
@@ -245,7 +245,7 @@ class TestViolationDetection:
         test_file = tmp_path / "test.py"
         test_file.write_text("from pkg.sub.module import Name")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         if result.violations:
             assert result.violations[0].code == "MP001"
 
@@ -266,7 +266,7 @@ class TestViolationDetection:
 
         # Create a test to verify out-of-bounds line handling
         # (Normal usage won't trigger this, but the code handles it)
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Should process successfully
         assert result.files_checked == 1
 
@@ -277,7 +277,7 @@ class TestViolationDetection:
         test_file.write_text("import sys")
 
         # Check the file - this should work even if path resolution is complex
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         assert result.files_checked == 1
 
     def test_symlink_resolution_with_broken_link(self, tmp_path: Path) -> None:
@@ -290,7 +290,7 @@ class TestViolationDetection:
             pytest.skip("Symlinks not supported on this platform")
 
         # Should handle gracefully
-        result = check([tmp_path], src_roots=[tmp_path])
+        result, _ = check([tmp_path], src_roots=[tmp_path])
         # Broken symlink won't be checked
         assert result.files_checked == 0
 
@@ -309,5 +309,5 @@ class TestViolationDetection:
             pytest.skip("Symlinks not supported on this platform")
 
         # Even though we pass 3 paths, symlinks to same real file should be deduplicated
-        result = check([test_file, link1, link2], src_roots=[tmp_path])
+        result, _ = check([test_file, link1, link2], src_roots=[tmp_path])
         assert result.files_checked == 1

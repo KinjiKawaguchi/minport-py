@@ -25,7 +25,7 @@ def check(
     src_roots: Sequence[Path] | None = None,
     exclude: Sequence[str] = (),
     fix: bool = False,
-) -> CheckResult | tuple[CheckResult, FixResult]:
+) -> tuple[CheckResult, FixResult | None]:
     """Run the full minport check on the given paths."""
     effective_src = list(src_roots) if src_roots else _infer_src_roots(paths)
     files = _collect_files(paths, exclude)
@@ -77,14 +77,13 @@ def check(
         files_skipped=len(skipped),
     )
 
-    if fix:
-        files_violations: dict[Path, list[Violation]] = {}
-        for v in all_violations:
-            files_violations.setdefault(v.file_path, []).append(v)
-        fix_result = fix_files(files_violations)
-        return result, fix_result
+    if not fix:
+        return result, None
 
-    return result
+    files_violations: dict[Path, list[Violation]] = {}
+    for v in all_violations:
+        files_violations.setdefault(v.file_path, []).append(v)
+    return result, fix_files(files_violations)
 
 
 def _infer_src_roots(paths: Sequence[Path]) -> list[Path]:

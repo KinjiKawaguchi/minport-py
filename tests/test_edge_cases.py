@@ -19,7 +19,7 @@ class TestEdgeCases:
         test_file = tmp_path / "test.py"
         test_file.write_text("")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         assert result.files_checked == 1
         assert len(result.violations) == 0
 
@@ -28,7 +28,7 @@ class TestEdgeCases:
         test_file = tmp_path / "test.py"
         test_file.write_text("this is not valid python !!!")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         assert result.files_skipped == 1
         assert result.files_checked == 0
 
@@ -37,7 +37,7 @@ class TestEdgeCases:
         test_file = tmp_path / "test.bin"
         test_file.write_bytes(b"\x00\x01\x02\x03")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Binary files don't have .py extension, so they're not collected
         assert result.files_checked == 0
 
@@ -46,7 +46,7 @@ class TestEdgeCases:
         test_file = tmp_path / "test.py"
         test_file.write_text("from __future__ import annotations")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         assert len(result.violations) == 0
 
     def test_e5_typing_imports_are_checked(self, tmp_path: Path) -> None:
@@ -54,7 +54,7 @@ class TestEdgeCases:
         test_file = tmp_path / "test.py"
         test_file.write_text("from typing import TYPE_CHECKING")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Single segment, so not extracted, so no violations
         assert len(result.violations) == 0
 
@@ -76,7 +76,7 @@ if TYPE_CHECKING:
     from pkg.sub.module import Name
 """)
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Should still find violations in TYPE_CHECKING blocks
         # (AST walks all nodes regardless of control flow)
         if result.violations:
@@ -88,7 +88,7 @@ if TYPE_CHECKING:
         lines = ["import sys"] + ["x = 1"] * 1000
         test_file.write_text("\n".join(lines))
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         assert result.files_checked == 1
 
     def test_e8_duplicate_imports_from_different_paths(self, tmp_path: Path) -> None:
@@ -105,7 +105,7 @@ if TYPE_CHECKING:
         test_file = tmp_path / "test.py"
         test_file.write_text("from pkg.sub.module import Name\nfrom pkg.sub.module import Name")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Both imports should be reported if they're violations
         if result.violations:
             assert len([v for v in result.violations if v.name == "Name"]) >= 1
@@ -126,7 +126,7 @@ if TYPE_CHECKING:
             "from pkg.sub.module import Name  # minport: ignore\nfrom pkg.sub.module import Other"
         )
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Only Other should be reported
         other_violations = [v for v in result.violations if v.name == "Other"]
         name_violations = [v for v in result.violations if v.name == "Name"]
@@ -144,7 +144,7 @@ if TYPE_CHECKING:
         except OSError:
             pytest.skip("Symlinks not supported on this platform")
 
-        result = check([test_file, link], src_roots=[tmp_path])
+        result, _ = check([test_file, link], src_roots=[tmp_path])
         # Even though we passed both, they should be deduplicated
         assert result.files_checked == 1
 
@@ -156,7 +156,7 @@ if TYPE_CHECKING:
         test_file = subdir / "test file.py"
         test_file.write_text("import sys")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         assert result.files_checked == 1
 
     def test_unicode_in_imports(self, tmp_path: Path) -> None:
@@ -164,7 +164,7 @@ if TYPE_CHECKING:
         test_file = tmp_path / "test.py"
         test_file.write_text("# Comment with unicode: 你好\nfrom x.y.z import Name")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Should still parse correctly
         assert len(result.violations) == 0
 
@@ -178,7 +178,7 @@ if TYPE_CHECKING:
         from x.y.z import Name
 """)
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Should parse without crashing
         assert result.files_checked == 1
 
@@ -187,7 +187,7 @@ if TYPE_CHECKING:
         test_file = tmp_path / "test.py"
         test_file.write_text("from x.y.z import Name  # this is a comment")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Should parse the import correctly
         assert result.files_checked == 1
 
@@ -196,7 +196,7 @@ if TYPE_CHECKING:
         test_file = tmp_path / "test.py"
         test_file.write_text("from x.y.z import \\\n    Name, \\\n    Other")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         assert result.files_checked == 1
 
     def test_unreadable_file_skipped(self, tmp_path: Path) -> None:
@@ -206,7 +206,7 @@ if TYPE_CHECKING:
         test_file.chmod(0o000)
 
         try:
-            result = check([test_file], src_roots=[tmp_path])
+            result, _ = check([test_file], src_roots=[tmp_path])
             # File should be skipped
             assert result.files_skipped >= 1
         finally:
@@ -223,7 +223,7 @@ if TYPE_CHECKING:
         test2 = subdir / "test2.py"
         test2.write_text("import os")
 
-        result = check([tmp_path], src_roots=[tmp_path])
+        result, _ = check([tmp_path], src_roots=[tmp_path])
         # Both files should be checked
         assert result.files_checked == 2
 
@@ -235,7 +235,7 @@ if TYPE_CHECKING:
         test2 = tmp_path / "test_other.py"
         test2.write_text("import os")
 
-        result = check([tmp_path], exclude=["test_main.py"], src_roots=[tmp_path])
+        result, _ = check([tmp_path], exclude=["test_main.py"], src_roots=[tmp_path])
         # Only test_other.py should be checked
         assert result.files_checked == 1
 
@@ -247,7 +247,7 @@ if TYPE_CHECKING:
         test_file.write_text("import sys")
 
         # Use relative path
-        result = check([Path("test.py")], src_roots=[tmp_path])
+        result, _ = check([Path("test.py")], src_roots=[tmp_path])
         assert result.files_checked == 1
 
     def test_module_not_found_in_tree(self, tmp_path: Path) -> None:
@@ -255,7 +255,7 @@ if TYPE_CHECKING:
         test_file = tmp_path / "test.py"
         test_file.write_text("from nonexistent.module import Name")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Should not crash
         assert result.files_checked == 1
 
@@ -271,7 +271,7 @@ if TYPE_CHECKING:
         test_file = tmp_path / "test.py"
         test_file.write_text("from pkg.module import Name")
 
-        result = check([test_file], src_roots=[tmp_path])
+        result, _ = check([test_file], src_roots=[tmp_path])
         # Should process without crashing
         assert result.files_checked == 1
 
@@ -325,7 +325,7 @@ if TYPE_CHECKING:
         test_md = tmp_path / "notes.md"
         test_md.write_text("# Notes")
 
-        result = check([tmp_path], src_roots=[tmp_path])
+        result, _ = check([tmp_path], src_roots=[tmp_path])
         # Should only check test.py, ignoring .txt and .md
         assert result.files_checked == 1
 
@@ -341,7 +341,7 @@ if TYPE_CHECKING:
         link = tmp_path / "usage_link.py"
         link.symlink_to(original)
 
-        result = check([tmp_path], src_roots=[tmp_path])
+        result, _ = check([tmp_path], src_roots=[tmp_path])
         # Both files point to same inode — should only check once
         assert result.files_checked >= 1
 
@@ -350,7 +350,7 @@ if TYPE_CHECKING:
         (tmp_path / "keep.py").write_text("import sys")
         (tmp_path / "skip.py").write_text("from os.path import join")
 
-        result = check([tmp_path], src_roots=[tmp_path], exclude=["skip.py"])
+        result, _ = check([tmp_path], src_roots=[tmp_path], exclude=["skip.py"])
         assert result.files_checked == 1
 
     def test_suppress_comment_out_of_bounds(self) -> None:
