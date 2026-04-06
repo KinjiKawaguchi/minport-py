@@ -10,9 +10,6 @@ from minport._models import ImportStatement
 if TYPE_CHECKING:
     from pathlib import Path
 
-# Imports that should never be flagged.
-_IGNORED_MODULES = frozenset({"__future__"})
-
 
 def parse_imports(tree: ast.Module, file_path: Path) -> list[ImportStatement]:
     """Extract all ``from X.Y import Name`` statements from *tree*.
@@ -31,8 +28,6 @@ def parse_imports(tree: ast.Module, file_path: Path) -> list[ImportStatement]:
             continue
         module = node.module or ""
         if not module or "." not in module:
-            continue
-        if module.split(".")[0] in _IGNORED_MODULES:
             continue
         results.extend(
             ImportStatement(
