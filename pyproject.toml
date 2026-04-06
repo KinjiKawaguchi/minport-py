@@ -1,0 +1,62 @@
+[project]
+name = "minport"
+version = "0.0.0"
+description = "A Python linter that finds unnecessarily long import paths and suggests shorter alternatives"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "KinjiKawaguchi" }]
+keywords = ["linter", "static-analysis", "import", "refactoring", "code-quality"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Quality Assurance",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/KinjiKawaguchi/minport"
+Repository = "https://github.com/KinjiKawaguchi/minport"
+Issues = "https://github.com/KinjiKawaguchi/minport/issues"
+
+[project.scripts]
+minport = "minport.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/minport"]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pytest-cov>=6.0", "ruff>=0.12", "ty>=0.0.1", "pip-audit>=2.0", "pre-commit>=4.0"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 99
+extend-exclude = ["tests/fixtures/"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["D1", "COM812", "ISC001", "D203", "D213"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "ANN", "D", "PLR2004", "SLF001", "TC001", "TC003"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers -ra"
+
+[tool.coverage.run]
+source = ["minport"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 100
