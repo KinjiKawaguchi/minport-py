@@ -383,10 +383,15 @@ _SKIP_STMTS: tuple[type[ast.stmt], ...] = (
     ast.Pass,
     ast.Break,
     ast.Continue,
+    # PEP 695 ``type X = ...`` (Python 3.12+). Accessed via ``getattr`` so
+    # the expression stays valid on 3.11 where ``ast.TypeAlias`` is absent,
+    # and inlined here so every Python version executes the same single
+    # tuple-literal line (keeps line coverage at 100% across the matrix).
+    # ast.TypeAlias is Python 3.12+; direct access would break 3.11 imports.
+    *(
+        (getattr(ast, "TypeAlias"),) if hasattr(ast, "TypeAlias") else ()  # noqa: B009
+    ),
 )
-_type_alias_cls = getattr(ast, "TypeAlias", None)
-if _type_alias_cls is not None:  # PEP 695, Python 3.12+
-    _SKIP_STMTS = (*_SKIP_STMTS, _type_alias_cls)
 
 
 def _child_stmt_blocks(stmt: ast.stmt) -> Iterator[Sequence[ast.stmt]]:
