@@ -83,7 +83,12 @@ def check(
     files_violations: dict[Path, list[Violation]] = {}
     for v in all_violations:
         files_violations.setdefault(v.file_path, []).append(v)
-    return result, fix_files(files_violations)
+    fixable = {
+        fp: _drop_duplicate_fixes(vs, parsed[fp])
+        for fp, vs in files_violations.items()
+        if fp in parsed
+    }
+    return result, fix_files(fixable)
 
 
 def _infer_src_roots(paths: Sequence[Path]) -> list[Path]:
@@ -167,6 +172,42 @@ def _safe_parse(
         tree=tree,
         source_lines=tuple(source.splitlines()),
     )
+
+
+def _drop_duplicate_fixes(
+    violations: list[Violation],
+    parsed_file: ParsedFile,
+) -> list[Violation]:
+    """Drop violations whose rewrite would duplicate another import in the file.
+
+    Skipping (rather than merging) is the safe choice: if the user already has
+    ``from M import N`` on another line, rewriting ``from M.sub import N`` would
+    produce a second import of ``(M, N)`` — flagged by ruff F811 / F401.
+    Leaving the longer import in place preserves existing bindings.
+    """
+    existing = _collect_all_from_imports(parsed_file.tree)
+    return [
+        v
+        for v in violations
+        if (v.shorter_path, v.name) not in existing or existing[v.shorter_path, v.name] == v.line
+    ]
+
+
+def _collect_all_from_imports(tree: ast.Module) -> dict[tuple[str, str], int]:
+    """Map ``(module, name)`` to line for every absolute from-import in *tree*.
+
+    Unlike :func:`parse_imports`, single-segment modules (``from pkg import X``)
+    are included — they are the very targets that duplicate-fix detection
+    needs to compare against.
+    """
+    imports: dict[tuple[str, str], int] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
+            continue
+        module = node.module
+        for alias in node.names:
+            imports.setdefault((module, alias.name), node.lineno)
+    return imports
 
 
 def _has_suppress_comment(lineno: int, source_lines: tuple[str, ...]) -> bool:
