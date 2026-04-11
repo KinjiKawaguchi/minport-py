@@ -98,7 +98,8 @@ def _extract_exported_names(tree: ast.Module) -> set[str]:
     all_names = _collect_all_names(tree)
 
     if all_names is not None:
-        return reexported_names & all_names
+        assigned_aliases = _collect_assigned_aliases(tree)
+        return (reexported_names | assigned_aliases) & all_names
 
     return reexported_names
 
@@ -111,6 +112,25 @@ def _collect_reexported_names(tree: ast.Module) -> set[str]:
             for alias in node.names:
                 if alias.name != "*":
                     names.add(alias.asname or alias.name)
+    return names
+
+
+def _collect_assigned_aliases(tree: ast.Module) -> set[str]:
+    """Collect top-level ``Name = other.attr`` assignments (re-export aliases).
+
+    Only assignments whose RHS is an attribute access are treated as candidates,
+    to avoid capturing arbitrary value assignments. The caller must intersect
+    with ``__all__`` before treating them as public.
+    """
+    names: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not isinstance(node.value, ast.Attribute):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                names.add(target.id)
     return names
 
 
