@@ -429,16 +429,13 @@ if TYPE_CHECKING:
         assert "from .rel import other\n" in content
         assert "from pkg import Thing\n" in content
 
-    def test_fix_skips_whole_line_when_one_name_would_duplicate(
+    def test_fix_moves_only_non_colliding_name_on_multi_name_line(
         self,
         tmp_path: Path,
     ) -> None:
-        """Per-line grouping: line-level rewrite must drop the whole line.
-
-        ``_rewrite_import_line`` replaces the module path for a whole line at
-        once, so keeping any violation on a multi-name line forces every name
-        on it to be shortened. If even one of those names already exists at
-        the shorter path, applying the fix would duplicate it.
+        """Per-violation guard: on a multi-name line, only the names whose
+        shorter target does not already exist should be moved. The AST-based
+        fixer splits the line and leaves the colliding name behind.
         """
         pkg = tmp_path / "pkg"
         pkg.mkdir()
@@ -458,10 +455,13 @@ if TYPE_CHECKING:
         check([test_file], src_roots=[tmp_path], fix=True)
 
         content = test_file.read_text()
-        # The multi-name line must not have been rewritten — otherwise
-        # Thing would be duplicated by the line-level replacement.
-        assert "from pkg.sub.inner import Thing, Other" in content
-        assert content.count("from pkg import Thing") == 1
+        # The colliding ``Thing`` stays on the original line; ``Other`` is
+        # split out into its own shorter import. Exactly one ``from pkg
+        # import Thing`` — no duplicate was introduced.
+        assert content.count("from pkg import Thing\n") == 1
+        assert "from pkg import Other" in content
+        assert "from pkg.sub.inner import Thing" in content
+        assert "from pkg.sub.inner import Thing, Other" not in content
 
     def test_fix_skips_two_violations_colliding_on_same_target(
         self,

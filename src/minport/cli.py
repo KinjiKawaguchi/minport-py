@@ -66,6 +66,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to pyproject.toml",
     )
+    check_parser.add_argument(
+        "--quiet",
+        "-q",
+        action="store_true",
+        default=False,
+        help="Suppress the summary line",
+    )
     check_parser.set_defaults(handler=_handle_check)
     return parser
 
@@ -86,7 +93,7 @@ def _handle_check(args: argparse.Namespace) -> int:
             return 2
 
     check_result, fix_result = check(paths, src_roots=src_roots, exclude=exclude, fix=args.fix)
-    _output_text(check_result, fix_result)
+    _output_text(check_result, fix_result, quiet=args.quiet)
 
     return 1 if check_result.violations else 0
 
@@ -121,22 +128,27 @@ def _config_str_list(config: dict[str, object], key: str, default: list[str]) ->
 def _output_text(
     result: CheckResult,
     fix_result: FixResult | None = None,
+    *,
+    quiet: bool = False,
 ) -> None:
     for v in result.violations:
         sys.stdout.write(f"{v.file_path}:{v.line}:{v.col}: {v.code} {v.message}\n")
+    if quiet:
+        return
+    sys.stdout.write(_summary_line(result, fix_result))
+
+
+def _summary_line(result: CheckResult, fix_result: FixResult | None) -> str:
     count = len(result.violations)
-    if count:
-        if fix_result:
-            sys.stdout.write(
-                f"Found {count} error{'s' if count != 1 else ''}."
-                f" Fixed {fix_result.fixes_applied} in {fix_result.files_modified} file"
-                f"{'s' if fix_result.files_modified != 1 else ''}.\n",
-            )
-        else:
-            sys.stdout.write(
-                f"Found {count} error{'s' if count != 1 else ''}"
-                f" ({result.fixable_count} fixable with `minport check --fix`).\n",
-            )
+    errors = f"Found {count} error{'s' if count != 1 else ''}"
+    checked = f"checked {result.files_checked} file{'s' if result.files_checked != 1 else ''}"
+    if count == 0:
+        return f"{errors} ({checked}).\n"
+    if fix_result is not None:
+        files_word = "file" if fix_result.files_modified == 1 else "files"
+        fixed = f"fixed {fix_result.fixes_applied} in {fix_result.files_modified} {files_word}"
+        return f"{errors} ({checked}, {fixed}).\n"
+    return f"{errors} ({checked}, {result.fixable_count} fixable with `minport check --fix`).\n"
 
 
 if __name__ == "__main__":  # pragma: no cover

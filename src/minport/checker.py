@@ -183,30 +183,25 @@ def _drop_duplicate_fixes(
     produce a second import of ``(M, N)`` — flagged by ruff F811 / F401.
     Leaving the longer import in place preserves existing bindings.
 
-    Decisions are made per-line because the line-based fixer rewrites the
-    whole module path for a line at once: a single violation keeps the line
-    alive, forcing every name on it to be shortened. So any collision touching
-    a line disqualifies the entire line. We also track the post-fix targets
-    committed so far, so two independent lines that would both reduce to the
-    same ``(shorter, name)`` cannot both slip through.
+    The fixer rebuilds imports per-alias, so each violation can be decided
+    independently: a multi-name line is safe to partially rewrite as long as
+    each surviving move points at a unique, unclaimed ``(shorter, name)``
+    target. Two violations that would both reduce to the same target are
+    both dropped, since applying either alone still leaves a duplicate on
+    the untouched sibling.
     """
     existing = _collect_all_from_imports(parsed_file.tree)
-    by_line: dict[int, list[Violation]] = {}
+
+    target_count: dict[tuple[str, str], int] = {}
     for v in violations:
-        by_line.setdefault(v.line, []).append(v)
+        key = (v.shorter_path, v.name)
+        target_count[key] = target_count.get(key, 0) + 1
 
-    lines_per_target: dict[tuple[str, str], int] = {}
-    for line_vs in by_line.values():
-        for target in {(v.shorter_path, v.name) for v in line_vs}:
-            lines_per_target[target] = lines_per_target.get(target, 0) + 1
-
-    kept: list[Violation] = []
-    for line_vs in by_line.values():
-        targets = {(v.shorter_path, v.name) for v in line_vs}
-        if any(t in existing or lines_per_target[t] > 1 for t in targets):
-            continue
-        kept.extend(line_vs)
-    return kept
+    return [
+        v
+        for v in violations
+        if (v.shorter_path, v.name) not in existing and target_count[v.shorter_path, v.name] == 1
+    ]
 
 
 def _collect_all_from_imports(tree: ast.Module) -> dict[tuple[str, str], int]:
