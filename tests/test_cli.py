@@ -205,8 +205,7 @@ class TestCLI:
         sub = pkg / "sub"
         sub.mkdir()
 
-        # Create a violation: Name is re-exported from both pkg and pkg.sub
-        (pkg / "__init__.py").write_text("from .sub.module import Name")
+        (pkg / "__init__.py").write_text("")
         (sub / "__init__.py").write_text("from .module import Name")
         (sub / "module.py").write_text("Name = 1")
 
@@ -217,9 +216,8 @@ class TestCLI:
         exit_code = main(["check", str(test_file), "--fix", "--src", str(tmp_path)])
         captured = capsys.readouterr()
 
-        # If violations were found and fixed, output should mention it
-        if exit_code == 1:
-            assert "Fixed" in captured.out or "error" in captured.out
+        assert exit_code == 1
+        assert "fixed 1 in 1 file" in captured.out
 
     def test_cli_with_invalid_toml(self, tmp_path: Path) -> None:
         """Test: Invalid TOML config file is skipped."""
