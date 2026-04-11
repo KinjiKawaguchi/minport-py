@@ -275,6 +275,17 @@ class TestReexportResolver:
         shortest = resolver.find_shortest_path("pkg.module", "Name")
         assert shortest == "pkg"
 
+    def test_wildcard_absolute_import(self, tmp_path: Path) -> None:
+        """Absolute ``from pkg.module import *`` is resolved as well."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("from pkg.module import *")
+        (pkg / "module.py").write_text("class Name: pass")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Name" in exported
+
     def test_wildcard_level_exceeds_package_depth(self, tmp_path: Path) -> None:
         """Over-deep relative wildcard (e.g. ``from .... import *``) is ignored."""
         pkg = tmp_path / "pkg"
