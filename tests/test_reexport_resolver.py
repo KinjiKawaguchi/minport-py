@@ -529,6 +529,18 @@ class TestReexportResolver:
         resolver = ReexportResolver([tmp_path])
         assert resolver._get_exported_names("pkg") == {"Name"}
 
+    def test_wildcard_namespace_missing_target(self, tmp_path: Path) -> None:
+        """``_get_exported_names`` tolerates a wildcard target that does not exist."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            "from .missing import *\nfrom .good import Name\n__all__ = ['Name']\n",
+        )
+        (pkg / "good.py").write_text("class Name: ...\n")
+
+        resolver = ReexportResolver([tmp_path])
+        assert resolver._get_exported_names("pkg") == {"Name"}
+
     def test_wildcard_origin_skips_missing_target(self, tmp_path: Path) -> None:
         """``_wildcard_origin`` skips wildcard targets that cannot be found."""
         pkg = tmp_path / "pkg"
