@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
-from minport._reexport_resolver import ReexportResolver
+from minport._reexport_resolver import ReexportResolver, _child_stmt_blocks
 
 
 class TestReexportResolver:
@@ -470,3 +472,17 @@ class TestReexportResolver:
 
         resolver = ReexportResolver([tmp_path])
         assert resolver.find_shortest_path("pkg._impl", "Quux") == "pkg"
+
+    def test_child_stmt_blocks_rejects_unknown_stmt_subclass(self) -> None:
+        """Synthetic ``ast.stmt`` subclass trips the walker's exhaustiveness guard.
+
+        Guards against a future Python grammar extension slipping past the
+        enumerated ``_SKIP_STMTS`` tuple. Any such omission must fail the
+        test suite instead of silently being ignored.
+        """
+
+        class _FakeStmt(ast.stmt):
+            _fields: ClassVar[tuple[str, ...]] = ()
+
+        with pytest.raises(TypeError, match=r"Unhandled ast\.stmt subclass"):
+            list(_child_stmt_blocks(_FakeStmt()))

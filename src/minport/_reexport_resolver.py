@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
+    from typing import NoReturn
 
 Origin = tuple[Path, str]
 
@@ -254,16 +255,79 @@ def _walk_stmts(stmts: Sequence[ast.stmt]) -> Iterator[ast.stmt]:
             yield from _walk_stmts(child)
 
 
+_SKIP_STMTS: tuple[type[ast.stmt], ...] = (
+    # Nested scopes: bodies cannot publish module-level bindings at runtime.
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    # Compound hosts that are legal but not realistic re-export sites.
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.With,
+    ast.AsyncWith,
+    ast.Match,
+    # Simple statements with no stmt-body to recurse into.
+    ast.Return,
+    ast.Delete,
+    ast.Assign,
+    ast.AugAssign,
+    ast.AnnAssign,
+    ast.Raise,
+    ast.Assert,
+    ast.Import,
+    ast.ImportFrom,
+    ast.Global,
+    ast.Nonlocal,
+    ast.Expr,
+    ast.Pass,
+    ast.Break,
+    ast.Continue,
+)
+_type_alias_cls = getattr(ast, "TypeAlias", None)
+if _type_alias_cls is not None:  # PEP 695, Python 3.12+
+    _SKIP_STMTS = (*_SKIP_STMTS, _type_alias_cls)
+
+
 def _child_stmt_blocks(stmt: ast.stmt) -> Iterator[Sequence[ast.stmt]]:
+    """Yield the nested stmt bodies ``_walk_stmts`` should recurse into.
+
+    ``If`` / ``Try`` / ``TryStar`` bodies are walked because re-exports
+    guarded by them still execute at runtime. Every other statement type
+    is enumerated in ``_SKIP_STMTS`` as a deliberate no-op; anything that
+    leaks past both groups hits ``_raise_unhandled_stmt`` so new Python
+    grammar additions surface at test time rather than silently producing
+    wrong results.
+    """
     if isinstance(stmt, ast.If):
         yield stmt.body
         yield stmt.orelse
-    elif isinstance(stmt, (ast.Try, ast.TryStar)):
+        return
+    if isinstance(stmt, (ast.Try, ast.TryStar)):
         yield stmt.body
         for handler in stmt.handlers:
             yield handler.body
         yield stmt.orelse
         yield stmt.finalbody
+        return
+    if isinstance(stmt, _SKIP_STMTS):
+        return
+    _raise_unhandled_stmt(stmt)
+
+
+def _raise_unhandled_stmt(stmt: ast.stmt) -> NoReturn:
+    """Fail loudly on an ``ast.stmt`` subclass the walker was not taught about.
+
+    Acts as a runtime ``assert_never`` equivalent. Static exhaustiveness
+    via ``typing.assert_never`` cannot narrow here because ``_SKIP_STMTS``
+    is built dynamically (to accommodate ``ast.TypeAlias`` being absent on
+    Python 3.11), so this helper takes over as the last-line guard.
+    """
+    msg = (
+        "Unhandled ast.stmt subclass in re-export walker: "
+        f"{type(stmt).__name__}. Update _child_stmt_blocks to classify it."
+    )
+    raise TypeError(msg)
 
 
 def _is_type_checking_guard(test: ast.expr) -> bool:
