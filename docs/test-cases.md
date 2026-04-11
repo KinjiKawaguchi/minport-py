@@ -13,7 +13,7 @@
 | P-7 | 複数行に渡る import（`\` や括弧継続）を正しく抽出 | 正しい行番号 |
 | P-8 | コメント行・文字列内の import は無視 | 抽出しない |
 
-## R: re-export 解析 (12 cases)
+## R: re-export 解析 (17 cases)
 
 | ID | テストケース | 期待結果 |
 |----|------------|---------|
@@ -29,6 +29,11 @@
 | R-10 | サードパーティのパッケージが見つからない | スキップ（エラーにならない） |
 | R-11 | 循環 re-export がある場合 | 無限ループせずに処理完了 |
 | R-12 | `from .module import *` による re-export | 検出しない（スコープ外） |
+| R-13 | `Foo = _impl._Foo` 形式の代入が `__all__` に含まれる | Name は親パッケージから import 可能 |
+| R-13b | 代入 re-export があっても `__all__` が無い | 短縮不可（安全側） |
+| R-13c | `Foo = 1` のような非属性アクセス RHS | 代入 re-export として扱わない |
+| R-13d | `Foo: type = _impl._Foo` 形式の注釈付き代入が `__all__` に含まれる | Name は親パッケージから import 可能 |
+| R-13e | `Foo: int = 1` のような注釈付き非属性 RHS | 代入 re-export として扱わない |
 
 ## D: 違反検出 (10 cases)
 
@@ -103,7 +108,7 @@
 tests/
 ├── conftest.py
 ├── test_import_parser.py      # P-1〜P-8
-├── test_reexport_resolver.py  # R-1〜R-12
+├── test_reexport_resolver.py  # R-1〜R-13e
 ├── test_detection.py          # D-1〜D-10
 ├── test_fixer.py              # F-1〜F-8
 ├── test_third_party.py        # S-1〜S-6
@@ -114,4 +119,4 @@ tests/
     └── third_party/           # サードパーティ模擬
 ```
 
-合計: 62 cases
+合計: 67 cases
