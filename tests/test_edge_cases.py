@@ -370,6 +370,150 @@ if TYPE_CHECKING:
         result = _is_excluded(Path("/elsewhere/file.py"), Path("/some/base"), ["*.py"])
         assert result is True
 
+    def test_fix_skips_when_duplicate_of_existing_import(self, tmp_path: Path) -> None:
+        """Issue #4: --fix must not create a line that duplicates another import.
+
+        When ``from X.Y import Thing as _Thing`` and ``from X import Thing``
+        coexist, rewriting the first to ``from X import Thing as _Thing``
+        produces an import of the same (module, name) that already exists.
+        The fixer must skip the rewrite to avoid F811/F401-equivalent redundancy.
+        """
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+        (sub / "__init__.py").write_text("")
+        (sub / "inner.py").write_text("Thing = 1\n")
+        (pkg / "__init__.py").write_text("from pkg.sub.inner import Thing\n")
+
+        test_file = tmp_path / "user.py"
+        test_file.write_text(
+            "from pkg.sub.inner import Thing as _Thing\nfrom pkg import Thing\n",
+        )
+
+        check([test_file], src_roots=[tmp_path], fix=True)
+
+        content = test_file.read_text()
+        # The short form must still be present.
+        assert "from pkg import Thing\n" in content
+        # The rewrite must NOT have produced a duplicate import of (pkg, Thing).
+        assert "from pkg import Thing as _Thing" not in content
+        # Since the rewrite is skipped, the original longer import is retained.
+        assert "from pkg.sub.inner import Thing as _Thing" in content
+
+    def test_fix_duplicate_check_ignores_relative_imports(self, tmp_path: Path) -> None:
+        """Duplicate-fix scan must skip ``from . import`` / ``from .rel import``.
+
+        Relative imports reference no absolute module path and cannot collide
+        with a rewritten ``from X import Name`` line. The scan must walk past
+        them without error and still apply the fix to the real violation.
+        """
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+        (sub / "__init__.py").write_text("")
+        (sub / "inner.py").write_text("Thing = 1\n")
+        (pkg / "__init__.py").write_text("from pkg.sub.inner import Thing\n")
+
+        test_file = tmp_path / "user.py"
+        test_file.write_text(
+            "from . import something\nfrom .rel import other\nfrom pkg.sub.inner import Thing\n",
+        )
+
+        check([test_file], src_roots=[tmp_path], fix=True)
+
+        content = test_file.read_text()
+        # Relative imports are untouched; the absolute violation is fixed.
+        assert "from . import something\n" in content
+        assert "from .rel import other\n" in content
+        assert "from pkg import Thing\n" in content
+
+    def test_fix_moves_only_non_colliding_name_on_multi_name_line(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Per-violation guard: on a multi-name line, only the names whose
+        shorter target does not already exist should be moved. The AST-based
+        fixer splits the line and leaves the colliding name behind.
+        """
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+        (sub / "__init__.py").write_text("")
+        (sub / "inner.py").write_text("Thing = 1\nOther = 2\n")
+        (pkg / "__init__.py").write_text(
+            "from pkg.sub.inner import Thing\nfrom pkg.sub.inner import Other\n",
+        )
+
+        test_file = tmp_path / "user.py"
+        test_file.write_text(
+            "from pkg import Thing\nfrom pkg.sub.inner import Thing, Other\n",
+        )
+
+        check([test_file], src_roots=[tmp_path], fix=True)
+
+        content = test_file.read_text()
+        # The colliding ``Thing`` stays on the original line; ``Other`` is
+        # split out into its own shorter import. Exactly one ``from pkg
+        # import Thing`` — no duplicate was introduced.
+        assert content.count("from pkg import Thing\n") == 1
+        assert "from pkg import Other" in content
+        assert "from pkg.sub.inner import Thing" in content
+        assert "from pkg.sub.inner import Thing, Other" not in content
+
+    def test_fix_skips_two_violations_colliding_on_same_target(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Inter-violation dedup: if two lines would both reduce to the same
+        ``(shorter, name)``, applying either alone still leaves a duplicate
+        with the other unchanged line. Skip both.
+        """
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub1 = pkg / "sub1"
+        sub1.mkdir()
+        sub2 = pkg / "sub2"
+        sub2.mkdir()
+        (sub1 / "__init__.py").write_text("Thing = 1\n")
+        (sub2 / "__init__.py").write_text("Thing = 2\n")
+        (pkg / "__init__.py").write_text("from pkg.sub1 import Thing\n")
+
+        test_file = tmp_path / "user.py"
+        test_file.write_text(
+            "from pkg.sub1 import Thing as A\nfrom pkg.sub1 import Thing as B\n",
+        )
+
+        check([test_file], src_roots=[tmp_path], fix=True)
+
+        content = test_file.read_text()
+        # Neither line is rewritten: rewriting both would create two
+        # ``from pkg import Thing`` lines.
+        assert "from pkg.sub1 import Thing as A" in content
+        assert "from pkg.sub1 import Thing as B" in content
+        assert "from pkg import Thing" not in content
+
+    def test_fixable_count_excludes_duplicate_skips(self, tmp_path: Path) -> None:
+        """``CheckResult.fixable_count`` must exclude violations the fixer skips."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+        (sub / "__init__.py").write_text("")
+        (sub / "inner.py").write_text("Thing = 1\n")
+        (pkg / "__init__.py").write_text("from pkg.sub.inner import Thing\n")
+
+        test_file = tmp_path / "user.py"
+        test_file.write_text(
+            "from pkg.sub.inner import Thing as _Thing\nfrom pkg import Thing\n",
+        )
+
+        result, _ = check([test_file], src_roots=[tmp_path])
+        assert len(result.violations) == 1
+        assert result.fixable_count == 0
+
     def test_cli_no_paths_no_config(self, monkeypatch, tmp_path: Path) -> None:
         """CLI with no paths and no config src falls back to Path()."""
         (tmp_path / "simple.py").write_text("import os")

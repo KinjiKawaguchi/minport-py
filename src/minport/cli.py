@@ -148,7 +148,7 @@ def _summary_line(result: CheckResult, fix_result: FixResult | None) -> str:
         files_word = "file" if fix_result.files_modified == 1 else "files"
         fixed = f"fixed {fix_result.fixes_applied} in {fix_result.files_modified} {files_word}"
         return f"{errors} ({checked}, {fixed}).\n"
-    return f"{errors} ({checked}, {count} fixable with `minport check --fix`).\n"
+    return f"{errors} ({checked}, {result.fixable_count} fixable with `minport check --fix`).\n"
 
 
 if __name__ == "__main__":  # pragma: no cover
