@@ -243,13 +243,16 @@ minport check src/                       # チェック
 minport check src/ --fix                 # チェック + 自動修正
 minport check src/ --src src/            # ソースルート指定
 minport check src/ --exclude "tests/*"   # 除外
+minport check src/ --quiet               # サマリ行を抑止
 ```
 
 ### 出力
 
+サマリ行は常に出力される（`--quiet` で抑止可）。違反 0 件でも `Found 0 errors (checked N files).` を出し、walk 件数を明示する。
+
 ```
 src/app/service.py:3:1: MP001 `from pydantic.fields import FieldInfo` can be shortened to `from pydantic import FieldInfo`
-Found 1 error (1 fixable with `minport check --fix`).
+Found 1 error (checked 1 file, 1 fixable with `minport check --fix`).
 ```
 
 ## Configuration
