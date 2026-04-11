@@ -78,18 +78,98 @@ class ReexportResolver:
         return False
 
     def _get_exported_names(self, module_path: str) -> set[str]:
-        """Return the set of names exported by the module at *module_path*."""
+        """Return the set of names exported by the package at *module_path*."""
         if module_path in self._names_cache:
             return self._names_cache[module_path]
 
-        init_file = self._find_init_file(module_path)
+        source_file = self._find_source_file(module_path)
         names: set[str] = set()
-        if init_file is not None:
-            tree = _safe_parse(init_file)
+        if source_file is not None:
+            tree = _safe_parse(source_file)
             if tree is not None:
-                names = _extract_exported_names(tree)
+                names = self._extract_exported_names(
+                    tree,
+                    module_path,
+                    is_package=source_file.name == "__init__.py",
+                    visited=frozenset({module_path}),
+                )
         self._names_cache[module_path] = names
         return names
+
+    def _extract_exported_names(
+        self,
+        tree: ast.Module,
+        module_path: str,
+        *,
+        is_package: bool,
+        visited: frozenset[str],
+    ) -> set[str]:
+        """Collect names exported by *tree*, including wildcard-resolved ones."""
+        reexported = _collect_reexported_names(tree)
+        assigned = _collect_assigned_aliases(tree)
+        wildcard = self._collect_wildcard_exports(
+            tree,
+            module_path,
+            is_package=is_package,
+            visited=visited,
+        )
+        all_names = _collect_all_names(tree)
+        if all_names is not None:
+            return (reexported | assigned | wildcard) & all_names
+        return reexported | wildcard
+
+    def _collect_wildcard_exports(
+        self,
+        tree: ast.Module,
+        module_path: str,
+        *,
+        is_package: bool,
+        visited: frozenset[str],
+    ) -> set[str]:
+        """Gather names brought in by ``from X import *`` statements in *tree*."""
+        collected: set[str] = set()
+        for target in _find_wildcard_targets(tree, module_path, is_package=is_package):
+            collected |= self._wildcard_namespace(target, visited)
+        return collected
+
+    def _wildcard_namespace(
+        self,
+        module_path: str,
+        visited: frozenset[str],
+    ) -> set[str]:
+        """Names that ``from module_path import *`` would bring into the caller.
+
+        Follows Python wildcard semantics: if the target defines ``__all__``,
+        use it verbatim; otherwise expose all top-level public names (excluding
+        underscore-prefixed). Recurses into nested wildcard imports with a
+        visited set guarding against cycles.
+        """
+        if module_path in visited:
+            return set()
+
+        source_file = self._find_source_file(module_path)
+        if source_file is None:
+            return set()
+        tree = _safe_parse(source_file)
+        if tree is None:
+            return set()
+
+        new_visited = visited | {module_path}
+        is_package = source_file.name == "__init__.py"
+
+        direct = _collect_reexported_names(tree) | _collect_top_level_defs(tree)
+        nested = self._collect_wildcard_exports(
+            tree,
+            module_path,
+            is_package=is_package,
+            visited=new_visited,
+        )
+        combined = direct | nested
+
+        all_names = _collect_all_names(tree)
+        if all_names is not None:
+            return combined & all_names
+        return {n for n in combined if not n.startswith("_")}
 
     def _resolve_origin(self, module_path: str, name: str) -> Origin | None:
         """Trace *name* through re-export chains to its terminal definition."""
@@ -119,7 +199,8 @@ class ReexportResolver:
     ) -> Origin | None:
         parsed = self._parse_for_origin(module_path, name)
         if parsed is None:
-            return None
+            return self._wildcard_origin(module_path, name, visited)
+
         source_file, binding = parsed
         if binding.is_definition:
             return (source_file, name)
@@ -155,14 +236,53 @@ class ReexportResolver:
             return None
         return source_file, binding
 
-    def _find_init_file(self, module_path: str) -> Path | None:
-        """Find the __init__.py for a dotted module path."""
-        parts = module_path.split(".")
-        for root in self._src_roots:
-            init = root / Path(*parts) / "__init__.py"
-            if init.is_file():
-                return init
-        return _find_installed_init(module_path)
+    def _wildcard_origin(
+        self,
+        module_path: str,
+        name: str,
+        visited: frozenset[tuple[str, str]],
+    ) -> Origin | None:
+        """Resolve *name* through ``from X import *`` statements.
+
+        Called when no direct binding is found. Respects the current module's
+        ``__all__`` gate and each wildcard target's wildcard-export rule.
+        """
+        source_file = self._find_source_file(module_path)
+        if source_file is None:
+            return None
+        tree = _safe_parse(source_file)
+        if tree is None:
+            return None
+
+        public = _collect_all_names(tree)
+        if public is not None and name not in public:
+            return None
+
+        is_package = source_file.name == "__init__.py"
+        for target in _find_wildcard_targets(
+            tree,
+            module_path,
+            is_package=is_package,
+        ):
+            if not self._name_passes_wildcard(target, name):
+                continue
+            origin = self._walk_origin(target, name, visited)
+            if origin is not None:
+                return origin
+        return None
+
+    def _name_passes_wildcard(self, target_module: str, name: str) -> bool:
+        """Check that ``from target_module import *`` would expose *name*."""
+        source_file = self._find_source_file(target_module)
+        if source_file is None:
+            return False
+        tree = _safe_parse(source_file)
+        if tree is None:
+            return False
+        all_names = _collect_all_names(tree)
+        if all_names is not None:
+            return name in all_names
+        return not name.startswith("_")
 
     def _find_source_file(self, module_path: str) -> Path | None:
         """Find ``__init__.py`` or the ``.py`` module file for *module_path*."""
@@ -186,14 +306,6 @@ def _safe_parse(path: Path) -> ast.Module | None:
         return None
 
 
-def _find_installed_init(module_path: str) -> Path | None:
-    """Find __init__.py of an installed package via importlib."""
-    origin = _find_installed_origin(module_path)
-    if origin is None or origin.name != "__init__.py":
-        return None
-    return origin
-
-
 def _find_installed_source(module_path: str) -> Path | None:
     """Find the source file (.py or __init__.py) of an installed module."""
     origin = _find_installed_origin(module_path)
@@ -212,20 +324,8 @@ def _find_installed_origin(module_path: str) -> Path | None:
     return Path(spec.origin)
 
 
-def _extract_exported_names(tree: ast.Module) -> set[str]:
-    """Extract names that a module exports via re-export or __all__."""
-    reexported_names = _collect_reexported_names(tree)
-    all_names = _collect_all_names(tree)
-
-    if all_names is not None:
-        assigned_aliases = _collect_assigned_aliases(tree)
-        return (reexported_names | assigned_aliases) & all_names
-
-    return reexported_names
-
-
 def _collect_reexported_names(tree: ast.Module) -> set[str]:
-    """Collect names from ``from ... import ...`` statements.
+    """Collect names from ``from ... import ...`` statements (excluding ``*``).
 
     Walks nested bodies so that imports guarded by ``try/except`` or runtime
     ``if`` blocks are recognized as re-exports. Imports under
@@ -364,6 +464,50 @@ def _collect_assigned_aliases(tree: ast.Module) -> set[str]:
     return names
 
 
+def _collect_top_level_defs(tree: ast.Module) -> set[str]:
+    """Collect all top-level class/function/assignment names.
+
+    Used for wildcard semantics where any top-level public name defined in
+    the target module is made available by ``from module import *``.
+    """
+    names: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return names
+
+
+def _find_wildcard_targets(
+    tree: ast.Module,
+    current_module: str,
+    *,
+    is_package: bool,
+) -> list[str]:
+    """Return the absolute module paths targeted by ``from X import *`` nodes."""
+    targets: list[str] = []
+    for node in ast.iter_child_nodes(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if not any(alias.name == "*" for alias in node.names):
+            continue
+        target_mod = node.module or ""
+        resolved = _resolve_relative_module(
+            current_module,
+            target_mod,
+            node.level,
+            is_package=is_package,
+        )
+        if resolved:
+            targets.append(resolved)
+    return targets
+
+
 def _collect_all_names(tree: ast.Module) -> set[str] | None:
     """Parse ``__all__ = [...]`` if present. Returns None if __all__ is absent."""
     for node in ast.iter_child_nodes(tree):
@@ -458,15 +602,18 @@ def _resolve_relative_module(
     ``level`` follows Python semantics: ``0`` means an absolute import, ``1``
     means the current package, ``2`` means its parent, and so on. When the
     current file is a module (not a package), ``level=1`` already refers to
-    the parent package.
+    the parent package. An empty *target* is allowed (``from .. import *``)
+    and resolves to just the base package.
     """
     if level == 0:
-        return target
+        return target or None
 
-    parts = current_module.split(".")
+    parts = current_module.split(".") if current_module else []
     up = level - 1 if is_package else level
     if up >= len(parts):
         return None
 
     base = parts[: len(parts) - up] if up > 0 else parts
-    return ".".join([*base, *target.split(".")])
+    target_parts = target.split(".") if target else []
+    combined = [*base, *target_parts]
+    return ".".join(combined) if combined else None
