@@ -30,7 +30,7 @@ class TestFixer:
         )
 
         result = fix_file(test_file, [violation])
-        assert result is True
+        assert result > 0
 
         content = test_file.read_text()
         assert "from x.y import Name" in content
@@ -87,7 +87,7 @@ class TestFixer:
         ]
 
         result = fix_file(test_file, violations)
-        assert result is True
+        assert result > 0
 
         content = test_file.read_text()
         assert "from x.y import A" in content
@@ -124,7 +124,7 @@ class TestFixer:
 
         # Only test fix_file returns False when given empty violations
         result = fix_file(test_file, [])
-        assert result is False
+        assert result == 0
 
     def test_f6_no_violations_no_modification(self, tmp_path: Path) -> None:
         """F-6: File with no violations is not modified."""
@@ -133,7 +133,7 @@ class TestFixer:
         test_file.write_text(original)
 
         result = fix_file(test_file, [])
-        assert result is False
+        assert result == 0
         assert test_file.read_text() == original
 
     def test_f7_name_conflict_not_fixed(self, tmp_path: Path) -> None:
@@ -158,7 +158,7 @@ class TestFixer:
 
         result = fix_file(test_file, [violation])
         # Should not modify since the paths are the same
-        assert result is False
+        assert result == 0
 
     def test_f8_fix_result_counts(self, tmp_path: Path) -> None:
         """F-8: FixResult reports correct files_modified and fixes_applied."""
@@ -220,7 +220,7 @@ class TestFixer:
         )
 
         result = fix_file(test_file, [violation])
-        assert result is False
+        assert result == 0
 
         # Clean up
         test_file.chmod(0o644)
@@ -265,7 +265,7 @@ class TestFixer:
         )
 
         result = fix_file(test_file, [violation])
-        assert result is False
+        assert result == 0
 
     def test_fix_multiple_violations_reverse_order(self, tmp_path: Path) -> None:
         """Test: Violations processed in reverse line order to preserve line numbers."""
@@ -309,12 +309,394 @@ class TestFixer:
         ]
 
         result = fix_file(test_file, violations)
-        assert result is True
+        assert result > 0
 
         content = test_file.read_text()
         assert "from x.y import A" in content
         assert "from x.y import B" in content
         assert "from x.y import C" in content
+
+    def test_multi_name_partial_move_splits_line(self, tmp_path: Path) -> None:
+        """Regression for issue #2.
+
+        ``from x.y.z import A, B`` where only ``A`` can be shortened to
+        ``x.y`` must not move ``B`` along with it. The fixer has to split
+        the statement so that ``B`` remains importable from ``x.y.z``.
+        """
+        test_file = tmp_path / "test.py"
+        test_file.write_text("from x.y.z import A, B\n")
+
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=1,
+            original_path="x.y.z",
+            shorter_path="x.y",
+            name="A",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        fix_file(test_file, [violation])
+        content = test_file.read_text()
+
+        assert "from x.y import A" in content
+        assert "from x.y.z import B" in content
+        assert "from x.y import A, B" not in content
+        ast.parse(content)
+
+    def test_multi_name_all_moved_to_same_shorter_path(self, tmp_path: Path) -> None:
+        """All names on a line move to the same shorter path → single rewrite."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("from x.y.z import A, B\n")
+
+        violations = [
+            Violation(
+                file_path=test_file,
+                line=1,
+                col=1,
+                original_path="x.y.z",
+                shorter_path="x.y",
+                name="A",
+                alias=None,
+                code="MP001",
+                message="test",
+            ),
+            Violation(
+                file_path=test_file,
+                line=1,
+                col=1,
+                original_path="x.y.z",
+                shorter_path="x.y",
+                name="B",
+                alias=None,
+                code="MP001",
+                message="test",
+            ),
+        ]
+
+        fix_file(test_file, violations)
+        content = test_file.read_text()
+
+        assert "from x.y import A, B" in content
+        assert "from x.y.z" not in content
+        ast.parse(content)
+
+    def test_multi_name_split_to_different_shorter_paths(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Names moving to different shorter paths produce one line each."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("from x.y.z import A, B, C\n")
+
+        violations = [
+            Violation(
+                file_path=test_file,
+                line=1,
+                col=1,
+                original_path="x.y.z",
+                shorter_path="x",
+                name="A",
+                alias=None,
+                code="MP001",
+                message="test",
+            ),
+            Violation(
+                file_path=test_file,
+                line=1,
+                col=1,
+                original_path="x.y.z",
+                shorter_path="x.y",
+                name="B",
+                alias=None,
+                code="MP001",
+                message="test",
+            ),
+        ]
+
+        fix_file(test_file, violations)
+        content = test_file.read_text()
+
+        assert "from x import A" in content
+        assert "from x.y import B" in content
+        assert "from x.y.z import C" in content
+        ast.parse(content)
+
+    def test_multi_name_partial_move_preserves_alias(self, tmp_path: Path) -> None:
+        """Alias on the moved name is preserved; untouched name keeps its alias too."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("from x.y.z import A as AA, B as BB\n")
+
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=1,
+            original_path="x.y.z",
+            shorter_path="x.y",
+            name="A",
+            alias="AA",
+            code="MP001",
+            message="test",
+        )
+
+        fix_file(test_file, [violation])
+        content = test_file.read_text()
+
+        assert "from x.y import A as AA" in content
+        assert "from x.y.z import B as BB" in content
+        ast.parse(content)
+
+    def test_fix_syntax_error_file_skipped(self, tmp_path: Path) -> None:
+        """Fixer returns False for files that cannot be parsed."""
+        test_file = tmp_path / "broken.py"
+        test_file.write_text("from x.y.z import (\n")  # unterminated
+
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=1,
+            original_path="x.y.z",
+            shorter_path="x.y",
+            name="Name",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        assert fix_file(test_file, [violation]) == 0
+
+    def test_fix_skips_import_with_inline_comment(self, tmp_path: Path) -> None:
+        """Inline comments on the import line block the rewrite (preserves the comment)."""
+        test_file = tmp_path / "test.py"
+        original = "from x.y.z import Name  # keep this\n"
+        test_file.write_text(original)
+
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=1,
+            original_path="x.y.z",
+            shorter_path="x.y",
+            name="Name",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        assert fix_file(test_file, [violation]) == 0
+        assert test_file.read_text() == original
+
+    def test_fix_skips_import_after_semicolon(self, tmp_path: Path) -> None:
+        """An import preceded by another statement on the same line is left alone."""
+        test_file = tmp_path / "test.py"
+        original = "a = 1; from x.y.z import Name\n"
+        test_file.write_text(original)
+
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=7,
+            original_path="x.y.z",
+            shorter_path="x.y",
+            name="Name",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        assert fix_file(test_file, [violation]) == 0
+        assert test_file.read_text() == original
+
+    def test_fix_skips_stale_violation_mismatched_module(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A violation whose original_path does not match the node is skipped."""
+        test_file = tmp_path / "test.py"
+        original = "from x.y.z import Name\n"
+        test_file.write_text(original)
+
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=1,
+            original_path="totally.different",
+            shorter_path="totally",
+            name="Name",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        assert fix_file(test_file, [violation]) == 0
+        assert test_file.read_text() == original
+
+    def test_fix_preserves_tab_indentation(self, tmp_path: Path) -> None:
+        """Tab-indented imports keep their tab prefix so the result still parses."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("if True:\n\tfrom x.y.z import A, B\n\tprint(A, B)\n")
+
+        violation = Violation(
+            file_path=test_file,
+            line=2,
+            col=2,
+            original_path="x.y.z",
+            shorter_path="x.y",
+            name="A",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        fix_file(test_file, [violation])
+        content = test_file.read_text()
+
+        assert "\tfrom x.y import A" in content
+        assert "\tfrom x.y.z import B" in content
+        ast.parse(content)  # no TabError
+
+    def test_fix_skips_import_with_trailing_semicolon_code(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Code after an import on the same line blocks the rewrite."""
+        test_file = tmp_path / "test.py"
+        original = "from x.y.z import A; y = 1\n"
+        test_file.write_text(original)
+
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=1,
+            original_path="x.y.z",
+            shorter_path="x.y",
+            name="A",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        assert fix_file(test_file, [violation]) == 0
+        assert test_file.read_text() == original
+
+    def test_fix_file_without_trailing_newline(self, tmp_path: Path) -> None:
+        """A final import line without a trailing newline is handled."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("from x.y.z import Name")
+
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=1,
+            original_path="x.y.z",
+            shorter_path="x.y",
+            name="Name",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        assert fix_file(test_file, [violation]) > 0
+        assert test_file.read_text() == "from x.y import Name"
+
+    def test_fixes_applied_excludes_skipped_lines(self, tmp_path: Path) -> None:
+        """Regression for #16.
+
+        When a file has multiple violations and one of them is silently
+        skipped by the safety guard (e.g. inline comment on the import
+        line), ``fixes_applied`` must reflect only the rewrites that
+        actually happened — not the raw ``len(violations)``.
+        """
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from pkg.sub.module import A  # keep this comment\nfrom other.deep.module import B\n",
+        )
+
+        violations = {
+            test_file: [
+                Violation(
+                    file_path=test_file,
+                    line=1,
+                    col=1,
+                    original_path="pkg.sub.module",
+                    shorter_path="pkg.sub",
+                    name="A",
+                    alias=None,
+                    code="MP001",
+                    message="test",
+                ),
+                Violation(
+                    file_path=test_file,
+                    line=2,
+                    col=1,
+                    original_path="other.deep.module",
+                    shorter_path="other.deep",
+                    name="B",
+                    alias=None,
+                    code="MP001",
+                    message="test",
+                ),
+            ],
+        }
+
+        result = fix_files(violations)
+
+        assert result.files_modified == 1
+        assert result.fixes_applied == 1, (
+            f"Only line 2 is rewritten (line 1 blocked by comment);"
+            f" fixes_applied should be 1, got {result.fixes_applied}"
+        )
+
+        content = test_file.read_text()
+        assert "from pkg.sub.module import A  # keep this comment" in content
+        assert "from other.deep import B" in content
+
+    def test_fixes_applied_excludes_stale_violations(self, tmp_path: Path) -> None:
+        """Regression for #16.
+
+        A violation whose ``original_path`` no longer matches the import
+        on its line (e.g. the source was edited between check and fix)
+        must not be counted in ``fixes_applied``, even when other valid
+        violations in the same file cause ``fix_file`` to modify something.
+        """
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from x.y.z import A\nfrom a.b.c import B\n",
+        )
+
+        violations = {
+            test_file: [
+                Violation(
+                    file_path=test_file,
+                    line=1,
+                    col=1,
+                    original_path="totally.different",
+                    shorter_path="totally",
+                    name="A",
+                    alias=None,
+                    code="MP001",
+                    message="test",
+                ),
+                Violation(
+                    file_path=test_file,
+                    line=2,
+                    col=1,
+                    original_path="a.b.c",
+                    shorter_path="a.b",
+                    name="B",
+                    alias=None,
+                    code="MP001",
+                    message="test",
+                ),
+            ],
+        }
+
+        result = fix_files(violations)
+
+        assert result.files_modified == 1
+        assert result.fixes_applied == 1
 
     def test_fix_with_import_not_matching_pattern(self, tmp_path: Path) -> None:
         """Test: When import pattern doesn't match, line is left unchanged."""

@@ -205,8 +205,7 @@ class TestCLI:
         sub = pkg / "sub"
         sub.mkdir()
 
-        # Create a violation: Name is re-exported from both pkg and pkg.sub
-        (pkg / "__init__.py").write_text("from .sub.module import Name")
+        (pkg / "__init__.py").write_text("")
         (sub / "__init__.py").write_text("from .module import Name")
         (sub / "module.py").write_text("Name = 1")
 
@@ -217,9 +216,8 @@ class TestCLI:
         exit_code = main(["check", str(test_file), "--fix", "--src", str(tmp_path)])
         captured = capsys.readouterr()
 
-        # If violations were found and fixed, output should mention it
-        if exit_code == 1:
-            assert "Fixed" in captured.out or "error" in captured.out
+        assert exit_code == 1
+        assert "fixed 1 in 1 file" in captured.out
 
     def test_cli_with_invalid_toml(self, tmp_path: Path) -> None:
         """Test: Invalid TOML config file is skipped."""
@@ -268,6 +266,92 @@ class TestCLI:
         # Should not crash, should use default
         exit_code = main(["check", str(test_file), "--config", str(config_file)])
         assert exit_code == 0
+
+    def test_summary_shown_when_no_violations(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Summary line is emitted even when no violations are found."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("import sys\n")
+
+        exit_code = main(["check", str(test_file)])
+        captured = capsys.readouterr()
+
+        assert exit_code == 0
+        assert "Found 0 errors" in captured.out
+        assert "checked 1 file" in captured.out
+
+    def test_summary_shown_when_no_python_files(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Summary distinguishes 'no files walked' from 'no violations'."""
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+
+        exit_code = main(["check", str(empty_dir)])
+        captured = capsys.readouterr()
+
+        assert exit_code == 0
+        assert "Found 0 errors" in captured.out
+        assert "checked 0 files" in captured.out
+
+    def test_summary_includes_checked_count_when_violations(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Summary includes the checked-files count even when violations exist."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+
+        (pkg / "__init__.py").write_text("")
+        (sub / "__init__.py").write_text("from .module import Name\n")
+        (sub / "module.py").write_text("Name = 1\n")
+
+        test_file = tmp_path / "test.py"
+        test_file.write_text("from pkg.sub.module import Name\n")
+
+        exit_code = main(["check", str(test_file), "--src", str(tmp_path)])
+        captured = capsys.readouterr()
+
+        assert exit_code == 1
+        assert "checked 1 file" in captured.out
+
+    def test_quiet_suppresses_summary_when_clean(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--quiet suppresses the summary line on a clean run."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("import sys\n")
+
+        exit_code = main(["check", str(test_file), "--quiet"])
+        captured = capsys.readouterr()
+
+        assert exit_code == 0
+        assert captured.out == ""
+
+    def test_quiet_still_prints_violations(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--quiet suppresses the summary but still prints per-violation lines."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+
+        (pkg / "__init__.py").write_text("")
+        (sub / "__init__.py").write_text("from .module import Name\n")
+        (sub / "module.py").write_text("Name = 1\n")
+
+        test_file = tmp_path / "test.py"
+        test_file.write_text("from pkg.sub.module import Name\n")
+
+        exit_code = main(["check", str(test_file), "--quiet", "--src", str(tmp_path)])
+        captured = capsys.readouterr()
+
+        assert exit_code == 1
+        assert "MP001" in captured.out
+        assert "Found" not in captured.out
 
     def test_cli_default_paths_from_config(self, tmp_path: Path, monkeypatch) -> None:
         """Test: Default paths from config are used when no paths specified."""

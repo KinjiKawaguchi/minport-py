@@ -183,6 +183,33 @@ class TestViolationDetection:
         for v in name_violations:
             assert not result.violations or v.shorter_path in ["pkg.x", "pkg"]
 
+    def test_d9b_multilevel_reexport_chain_not_conflict(self, tmp_path: Path) -> None:
+        """D-9b (Issue #3): Same name re-exported up a package hierarchy is not a conflict.
+
+        `pkg` re-exports `Thing` from `pkg.sub`, which re-exports it from
+        `pkg.sub.inner`. All three paths reference the same underlying symbol,
+        so `from pkg.sub.inner import Thing` should be shortenable to
+        `from pkg import Thing` — it must NOT be treated as a name conflict.
+        """
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+
+        (pkg / "__init__.py").write_text('from .sub.inner import Thing\n__all__ = ["Thing"]\n')
+        (sub / "__init__.py").write_text('from .inner import Thing\n__all__ = ["Thing"]\n')
+        (sub / "inner.py").write_text("class Thing:\n    pass\n")
+
+        test_file = tmp_path / "app.py"
+        test_file.write_text("from pkg.sub.inner import Thing\n")
+
+        result, _ = check([test_file], src_roots=[tmp_path])
+        thing_violations = [v for v in result.violations if v.name == "Thing"]
+        assert len(thing_violations) == 1, (
+            f"expected a shorter-path violation for Thing, got {result.violations}"
+        )
+        assert thing_violations[0].shorter_path == "pkg"
+
     def test_d10_future_imports_ignored(self, tmp_path: Path) -> None:
         """D-10: from __future__ import annotations etc. are ignored."""
         test_file = tmp_path / "test.py"
