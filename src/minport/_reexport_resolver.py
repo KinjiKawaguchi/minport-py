@@ -217,7 +217,8 @@ def _extract_exported_names(tree: ast.Module) -> set[str]:
     all_names = _collect_all_names(tree)
 
     if all_names is not None:
-        return reexported_names & all_names
+        assigned_aliases = _collect_assigned_aliases(tree)
+        return (reexported_names | assigned_aliases) & all_names
 
     return reexported_names
 
@@ -274,6 +275,31 @@ def _is_type_checking_guard(test: ast.expr) -> bool:
     return False
 
 
+def _collect_assigned_aliases(tree: ast.Module) -> set[str]:
+    """Collect top-level ``Name = other.attr`` assignments (re-export aliases).
+
+    Handles both plain ``Assign`` (``Foo = _impl._Foo``) and annotated
+    ``AnnAssign`` (``Foo: type[Base] = _impl._Foo``). Only assignments whose
+    RHS is an attribute access are treated as candidates, to avoid capturing
+    arbitrary value assignments. The caller must intersect with ``__all__``
+    before treating them as public.
+    """
+    names: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            if not isinstance(node.value, ast.Attribute):
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        elif isinstance(node, ast.AnnAssign):
+            if not isinstance(node.value, ast.Attribute):
+                continue
+            if isinstance(node.target, ast.Name):
+                names.add(node.target.id)
+    return names
+
+
 def _collect_all_names(tree: ast.Module) -> set[str] | None:
     """Parse ``__all__ = [...]`` if present. Returns None if __all__ is absent."""
     for node in ast.iter_child_nodes(tree):
@@ -301,14 +327,15 @@ def _parse_all_assignment(node: ast.Assign) -> set[str] | None:
 
 
 def _find_name_binding(tree: ast.Module, name: str) -> _Binding | None:
-    """Return the last top-level statement that binds *name*, if any.
+    """Return the last statement that binds *name* at runtime, if any.
 
-    Python import semantics follow the last binding wins rule, so for an
-    ``__init__.py`` that contains multiple assignments or imports of the same
-    name, only the final one reflects the runtime namespace.
+    Walks nested ``try/except`` and runtime ``if`` blocks so imports guarded
+    by them are honoured. ``if TYPE_CHECKING:`` branches are skipped because
+    the binding they introduce is not available at runtime. Python's last
+    binding wins rule still applies, so only the final match is returned.
     """
     last: _Binding | None = None
-    for node in ast.iter_child_nodes(tree):
+    for node in _iter_runtime_nodes(tree):
         candidate = _binding_from_node(node, name)
         if candidate is not None:
             last = candidate

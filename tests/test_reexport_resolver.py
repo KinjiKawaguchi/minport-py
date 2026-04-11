@@ -146,6 +146,71 @@ class TestReexportResolver:
         shortest = resolver.find_shortest_path("pkg.module", "Name")
         assert shortest is None
 
+    def test_r13_assign_reexport_via_attribute(self, tmp_path: Path) -> None:
+        """R-13: Foo = _impl._Foo assignment listed in __all__ is a re-export."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            'from . import _impl\n\nFoo = _impl._Foo\n__all__ = ["Foo"]\n',
+        )
+        (pkg / "_impl.py").write_text("class _Foo:\n    pass\n")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Foo" in exported
+
+    def test_r13_assign_reexport_without_all_not_recognized(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """R-13b: Assignment re-export without __all__ is ignored (safe default)."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            "from . import _impl\n\nFoo = _impl._Foo\n",
+        )
+        (pkg / "_impl.py").write_text("class _Foo:\n    pass\n")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Foo" not in exported
+
+    def test_r13_assign_non_attribute_rhs_excluded(self, tmp_path: Path) -> None:
+        """R-13c: Foo = 1 (non-attribute RHS) is not treated as re-export."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text('Foo = 1\n__all__ = ["Foo"]\n')
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Foo" not in exported
+
+    def test_r13_ann_assign_reexport_via_attribute(self, tmp_path: Path) -> None:
+        """R-13d: Annotated assignment Foo: type = _impl._Foo is a re-export."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            'from . import _impl\n\nFoo: type = _impl._Foo\n__all__ = ["Foo"]\n',
+        )
+        (pkg / "_impl.py").write_text("class _Foo:\n    pass\n")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Foo" in exported
+
+    def test_r13_ann_assign_non_attribute_rhs_excluded(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """R-13e: Foo: int = 1 (non-attribute RHS) is not treated as re-export."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text('Foo: int = 1\n__all__ = ["Foo"]\n')
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Foo" not in exported
+
     def test_r12_star_import_not_recognized(self, tmp_path: Path) -> None:
         """R-12: from .module import * → not recognized as re-export."""
         pkg = tmp_path / "pkg"
@@ -336,59 +401,57 @@ class TestReexportResolver:
         assert isinstance(has_conflict, bool)
 
     def test_r13_try_except_import_is_recognized(self, tmp_path: Path) -> None:
-        """R-13: Re-export inside try/except ImportError is recognized."""
+        """R-13: Re-export inside try/except is traced by find_shortest_path."""
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "__init__.py").write_text(
-            "try:\n    from ._fast import Foo\nexcept ImportError:\n    from ._slow import Foo\n",
+            "try:\n    from ._impl import Foo\nexcept ImportError:\n    from ._impl import Foo\n",
         )
-        (pkg / "_fast.py").write_text("Foo = 1")
-        (pkg / "_slow.py").write_text("Foo = 2")
+        (pkg / "_impl.py").write_text("class Foo: ...\n")
 
         resolver = ReexportResolver([tmp_path])
-        exported = resolver._get_exported_names("pkg")
-        assert "Foo" in exported
+        assert resolver.find_shortest_path("pkg._impl", "Foo") == "pkg"
 
     def test_r14_if_version_guarded_import_is_recognized(self, tmp_path: Path) -> None:
-        """R-14: Re-export inside if sys.version_info guard is recognized."""
+        """R-14: Re-export inside a runtime ``if`` block is traced."""
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "__init__.py").write_text(
             "import sys\n"
             "if sys.version_info >= (3, 12):\n"
-            "    from ._new import Bar\n"
+            "    from ._impl import Bar\n"
             "else:\n"
-            "    from ._old import Bar\n",
+            "    from ._impl import Bar\n",
         )
-        (pkg / "_new.py").write_text("Bar = 1")
-        (pkg / "_old.py").write_text("Bar = 2")
+        (pkg / "_impl.py").write_text("class Bar: ...\n")
 
         resolver = ReexportResolver([tmp_path])
-        exported = resolver._get_exported_names("pkg")
-        assert "Bar" in exported
+        assert resolver.find_shortest_path("pkg._impl", "Bar") == "pkg"
 
     def test_r15_type_checking_guarded_import_is_excluded(self, tmp_path: Path) -> None:
-        """R-15: Imports under ``if TYPE_CHECKING`` are NOT runtime re-exports."""
+        """R-15: ``if TYPE_CHECKING:`` imports are not runtime re-exports.
+
+        The shorter path must NOT be suggested because the name is not
+        actually available from ``pkg`` at runtime.
+        """
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "__init__.py").write_text(
-            "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from ._types import Baz\n",
+            "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from ._impl import Baz\n",
         )
-        (pkg / "_types.py").write_text("Baz = 1")
+        (pkg / "_impl.py").write_text("class Baz: ...\n")
 
         resolver = ReexportResolver([tmp_path])
-        exported = resolver._get_exported_names("pkg")
-        assert "Baz" not in exported
+        assert resolver.find_shortest_path("pkg._impl", "Baz") is None
 
     def test_r16_typing_type_checking_attribute_guard(self, tmp_path: Path) -> None:
-        """R-16: ``if typing.TYPE_CHECKING`` (attribute form) is also excluded."""
+        """R-16: ``if typing.TYPE_CHECKING:`` (attribute form) is also excluded."""
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "__init__.py").write_text(
-            "import typing\nif typing.TYPE_CHECKING:\n    from ._types import Qux\n",
+            "import typing\nif typing.TYPE_CHECKING:\n    from ._impl import Qux\n",
         )
-        (pkg / "_types.py").write_text("Qux = 1")
+        (pkg / "_impl.py").write_text("class Qux: ...\n")
 
         resolver = ReexportResolver([tmp_path])
-        exported = resolver._get_exported_names("pkg")
-        assert "Qux" not in exported
+        assert resolver.find_shortest_path("pkg._impl", "Qux") is None
