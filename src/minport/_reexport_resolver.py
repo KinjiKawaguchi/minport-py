@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
 
 class ReexportResolver:
@@ -104,14 +104,57 @@ def _extract_exported_names(tree: ast.Module) -> set[str]:
 
 
 def _collect_reexported_names(tree: ast.Module) -> set[str]:
-    """Collect names from ``from ... import ...`` statements."""
+    """Collect names from ``from ... import ...`` statements.
+
+    Walks nested bodies so that imports guarded by ``try/except`` or runtime
+    ``if`` blocks are recognized as re-exports. Imports under
+    ``if TYPE_CHECKING`` are skipped because they are not available at runtime.
+    """
     names: set[str] = set()
-    for node in ast.iter_child_nodes(tree):
+    for node in _iter_runtime_nodes(tree):
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 if alias.name != "*":
                     names.add(alias.asname or alias.name)
     return names
+
+
+def _iter_runtime_nodes(tree: ast.Module) -> Iterator[ast.stmt]:
+    """Yield statements reachable at runtime, skipping TYPE_CHECKING blocks."""
+    yield from _walk_stmts(tree.body)
+
+
+def _walk_stmts(stmts: Sequence[ast.stmt]) -> Iterator[ast.stmt]:
+    for stmt in stmts:
+        if isinstance(stmt, ast.If) and _is_type_checking_guard(stmt.test):
+            yield from _walk_stmts(stmt.orelse)
+            continue
+        yield stmt
+        for child in _child_stmt_blocks(stmt):
+            yield from _walk_stmts(child)
+
+
+def _child_stmt_blocks(stmt: ast.stmt) -> Iterator[Sequence[ast.stmt]]:
+    if isinstance(stmt, ast.If):
+        yield stmt.body
+        yield stmt.orelse
+    elif isinstance(stmt, ast.Try):
+        yield stmt.body
+        for handler in stmt.handlers:
+            yield handler.body
+        yield stmt.orelse
+        yield stmt.finalbody
+    elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+        yield stmt.body
+
+
+def _is_type_checking_guard(test: ast.expr) -> bool:
+    """Return True for ``if TYPE_CHECKING`` / ``if typing.TYPE_CHECKING``."""
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    if isinstance(test, ast.Attribute):
+        return test.attr == "TYPE_CHECKING"
+    return False
 
 
 def _collect_all_names(tree: ast.Module) -> set[str] | None:

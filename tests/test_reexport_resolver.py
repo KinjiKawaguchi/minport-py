@@ -191,3 +191,48 @@ class TestReexportResolver:
         has_conflict = resolver.has_name_conflict("Name", "x.y.module")
         # This depends on whether both paths export it
         assert isinstance(has_conflict, bool)
+
+    def test_r13_try_except_import_is_recognized(self, tmp_path: Path) -> None:
+        """R-13: Re-export inside try/except ImportError is recognized."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            "try:\n    from ._fast import Foo\nexcept ImportError:\n    from ._slow import Foo\n",
+        )
+        (pkg / "_fast.py").write_text("Foo = 1")
+        (pkg / "_slow.py").write_text("Foo = 2")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Foo" in exported
+
+    def test_r14_if_version_guarded_import_is_recognized(self, tmp_path: Path) -> None:
+        """R-14: Re-export inside if sys.version_info guard is recognized."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            "import sys\n"
+            "if sys.version_info >= (3, 12):\n"
+            "    from ._new import Bar\n"
+            "else:\n"
+            "    from ._old import Bar\n",
+        )
+        (pkg / "_new.py").write_text("Bar = 1")
+        (pkg / "_old.py").write_text("Bar = 2")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Bar" in exported
+
+    def test_r15_type_checking_guarded_import_is_excluded(self, tmp_path: Path) -> None:
+        """R-15: Imports under ``if TYPE_CHECKING`` are NOT runtime re-exports."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from ._types import Baz\n",
+        )
+        (pkg / "_types.py").write_text("Baz = 1")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Baz" not in exported
