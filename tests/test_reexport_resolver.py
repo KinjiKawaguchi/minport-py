@@ -455,3 +455,18 @@ class TestReexportResolver:
 
         resolver = ReexportResolver([tmp_path])
         assert resolver.find_shortest_path("pkg._impl", "Qux") is None
+
+    def test_r17_try_star_import_is_recognized(self, tmp_path: Path) -> None:
+        """R-17: Re-export inside a ``try/except*`` block (PEP 654) is traced."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            "try:\n"
+            "    from ._impl import Quux\n"
+            "except* ImportError:\n"
+            "    from ._impl import Quux\n",
+        )
+        (pkg / "_impl.py").write_text("class Quux: ...\n")
+
+        resolver = ReexportResolver([tmp_path])
+        assert resolver.find_shortest_path("pkg._impl", "Quux") == "pkg"

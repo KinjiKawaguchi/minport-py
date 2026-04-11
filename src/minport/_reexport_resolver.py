@@ -258,7 +258,7 @@ def _child_stmt_blocks(stmt: ast.stmt) -> Iterator[Sequence[ast.stmt]]:
     if isinstance(stmt, ast.If):
         yield stmt.body
         yield stmt.orelse
-    elif isinstance(stmt, ast.Try):
+    elif isinstance(stmt, (ast.Try, ast.TryStar)):
         yield stmt.body
         for handler in stmt.handlers:
             yield handler.body
