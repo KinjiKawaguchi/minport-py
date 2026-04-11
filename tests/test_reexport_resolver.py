@@ -236,3 +236,16 @@ class TestReexportResolver:
         resolver = ReexportResolver([tmp_path])
         exported = resolver._get_exported_names("pkg")
         assert "Baz" not in exported
+
+    def test_r16_typing_type_checking_attribute_guard(self, tmp_path: Path) -> None:
+        """R-16: ``if typing.TYPE_CHECKING`` (attribute form) is also excluded."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            "import typing\nif typing.TYPE_CHECKING:\n    from ._types import Qux\n",
+        )
+        (pkg / "_types.py").write_text("Qux = 1")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Qux" not in exported

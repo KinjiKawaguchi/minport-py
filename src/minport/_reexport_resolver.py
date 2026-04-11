@@ -144,8 +144,6 @@ def _child_stmt_blocks(stmt: ast.stmt) -> Iterator[Sequence[ast.stmt]]:
             yield handler.body
         yield stmt.orelse
         yield stmt.finalbody
-    elif isinstance(stmt, (ast.With, ast.AsyncWith)):
-        yield stmt.body
 
 
 def _is_type_checking_guard(test: ast.expr) -> bool:
