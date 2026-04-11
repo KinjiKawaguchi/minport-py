@@ -13,7 +13,7 @@
 | P-7 | 複数行に渡る import（`\` や括弧継続）を正しく抽出 | 正しい行番号 |
 | P-8 | コメント行・文字列内の import は無視 | 抽出しない |
 
-## R: re-export 解析 (12 cases)
+## R: re-export 解析 (18 cases)
 
 | ID | テストケース | 期待結果 |
 |----|------------|---------|
@@ -28,7 +28,13 @@
 | R-9 | サードパーティの `__init__.py` を AST 解析 | 正しく re-export を検出 |
 | R-10 | サードパーティのパッケージが見つからない | スキップ（エラーにならない） |
 | R-11 | 循環 re-export がある場合 | 無限ループせずに処理完了 |
-| R-12 | `from .module import *` による re-export | 検出しない（スコープ外） |
+| R-12 | `from .module import *` による re-export | 再帰的に解決し対象の公開名を取得 |
+| R-13 | wildcard import 時にターゲットの `__all__` を尊重 | `__all__` 外の名前は露出しない |
+| R-14 | wildcard import で `_` 始まりの名前を除外（`__all__` 未定義時） | `_Private` は露出しない |
+| R-15 | ネストした wildcard チェーン (`pkg/__init__` → `sub/__init__` → `x.py`) | 推移的に解決 |
+| R-16 | wildcard の循環 (`pkg → a → pkg`) | 無限ループせず到達可能な公開名を返す |
+| R-17 | `from .. import *` による親パッケージからの wildcard | 相対レベルを解決して露出 |
+| R-18 | `find_shortest_path` が wildcard 経由の短縮を検出 | `pkg.module` → `pkg` |
 
 ## D: 違反検出 (10 cases)
 
@@ -114,4 +120,4 @@ tests/
     └── third_party/           # サードパーティ模擬
 ```
 
-合計: 62 cases
+合計: 68 cases

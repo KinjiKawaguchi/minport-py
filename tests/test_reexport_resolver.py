@@ -145,8 +145,8 @@ class TestReexportResolver:
         shortest = resolver.find_shortest_path("pkg.module", "Name")
         assert shortest is None
 
-    def test_r12_star_import_not_recognized(self, tmp_path: Path) -> None:
-        """R-12: from .module import * → not recognized as re-export."""
+    def test_r12_star_import_resolved_recursively(self, tmp_path: Path) -> None:
+        """R-12: from .module import * → recursively resolves target's public names."""
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "__init__.py").write_text("from .module import *")
@@ -154,8 +154,7 @@ class TestReexportResolver:
 
         resolver = ReexportResolver([tmp_path])
         exported = resolver._get_exported_names("pkg")
-        # Star imports are explicitly excluded
-        assert "Name" not in exported
+        assert "Name" in exported
 
     def test_find_shortest_path_single_segment(self, tmp_path: Path) -> None:
         """Test: Single segment module has no shorter path."""
@@ -191,3 +190,116 @@ class TestReexportResolver:
         has_conflict = resolver.has_name_conflict("Name", "x.y.module")
         # This depends on whether both paths export it
         assert isinstance(has_conflict, bool)
+
+    def test_r13_wildcard_respects_target_all(self, tmp_path: Path) -> None:
+        """R-13: wildcard import respects target's __all__."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("from .module import *")
+        (pkg / "module.py").write_text(
+            "class Name: pass\nclass Other: pass\n__all__ = ['Name']",
+        )
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Name" in exported
+        assert "Other" not in exported
+
+    def test_r14_wildcard_excludes_underscore_prefixed(self, tmp_path: Path) -> None:
+        """R-14: wildcard without __all__ excludes names starting with '_'."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("from .module import *")
+        (pkg / "module.py").write_text("class Name: pass\nclass _Private: pass")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Name" in exported
+        assert "_Private" not in exported
+
+    def test_r15_nested_wildcard_chain(self, tmp_path: Path) -> None:
+        """R-15: nested wildcard chain resolves transitively."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("from .sub import *")
+
+        sub = pkg / "sub"
+        sub.mkdir()
+        (sub / "__init__.py").write_text("from .x import *")
+        (sub / "x.py").write_text("class Name: pass")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Name" in exported
+
+    def test_r16_wildcard_cycle_does_not_hang(self, tmp_path: Path) -> None:
+        """R-16: circular wildcard imports do not hang."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("from .a import *\nclass Root: pass")
+
+        sub = pkg / "a"
+        sub.mkdir()
+        (sub / "__init__.py").write_text("from .. import *\nclass Leaf: pass")
+
+        resolver = ReexportResolver([tmp_path])
+        # Must terminate without RecursionError or hang.
+        exported_pkg = resolver._get_exported_names("pkg")
+        exported_a = resolver._get_exported_names("pkg.a")
+        assert "Root" in exported_pkg
+        assert "Leaf" in exported_a
+
+    def test_r17_wildcard_relative_parent(self, tmp_path: Path) -> None:
+        """R-17: wildcard from parent package via `from .. import *`."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("class Root: pass")
+
+        sub = pkg / "sub"
+        sub.mkdir()
+        (sub / "__init__.py").write_text("from ..other import *")
+        (pkg / "other.py").write_text("class Name: pass")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg.sub")
+        assert "Name" in exported
+
+    def test_r18_find_shortest_via_wildcard(self, tmp_path: Path) -> None:
+        """R-18: find_shortest_path finds shortening through wildcard re-export."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("from .module import *")
+        (pkg / "module.py").write_text("class Name: pass")
+
+        resolver = ReexportResolver([tmp_path])
+        shortest = resolver.find_shortest_path("pkg.module", "Name")
+        assert shortest == "pkg"
+
+    def test_wildcard_level_exceeds_package_depth(self, tmp_path: Path) -> None:
+        """Over-deep relative wildcard (e.g. ``from .... import *``) is ignored."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("from .... import *\nclass Root: pass")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert exported == {"Root"}
+
+    def test_wildcard_top_level_dot_import(self, tmp_path: Path) -> None:
+        """``from . import *`` in a root-level module resolves to None (ignored)."""
+        (tmp_path / "root.py").write_text("from . import *\nclass Name: pass")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("root")
+        assert "Name" in exported
+
+    def test_top_level_annotated_assignment_is_exported(self, tmp_path: Path) -> None:
+        """Top-level ``Name: int = 1`` is recognized as a defined name."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("from .module import *")
+        (pkg / "module.py").write_text("Name: int = 1")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Name" in exported
