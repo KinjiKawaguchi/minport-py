@@ -116,8 +116,15 @@ def _rebuild_import(
 
     start_idx = node.lineno - 1
     end_idx = node.end_lineno or node.lineno
+    end_col = node.end_col_offset if node.end_col_offset is not None else len(lines[end_idx - 1])
     span_source = "".join(lines[start_idx:end_idx])
-    if not _is_safe_to_rebuild(span_source, start_line=lines[start_idx], col=node.col_offset):
+    if not _is_safe_to_rebuild(
+        span_source,
+        start_line=lines[start_idx],
+        start_col=node.col_offset,
+        end_line=lines[end_idx - 1],
+        end_col=end_col,
+    ):
         return None
 
     moves = _collect_moves(node, violations)
@@ -125,7 +132,7 @@ def _rebuild_import(
     if not groups:
         return None
 
-    indent = " " * node.col_offset
+    indent = lines[start_idx][: node.col_offset]
     trailing_nl = _detect_newline(lines[end_idx - 1])
 
     bodies: list[str] = [_format_from(shorter, groups[shorter]) for shorter in sorted(groups)]
@@ -166,16 +173,24 @@ def _partition_aliases(
     return groups, remaining
 
 
-def _is_safe_to_rebuild(span_source: str, *, start_line: str, col: int) -> bool:
+def _is_safe_to_rebuild(
+    span_source: str,
+    *,
+    start_line: str,
+    start_col: int,
+    end_line: str,
+    end_col: int,
+) -> bool:
     """Refuse rewrites that would drop comments or trailing code.
 
     Multi-line imports with inline ``#`` comments would lose those comments
-    when rebuilt from AST, and ``a = 1; from x import Y`` would lose the
-    leading statement if we replaced the whole line. In both cases we skip
-    so the user can address the import manually.
+    when rebuilt from AST, and ``a = 1; from x import Y; z = 2`` would lose
+    code on either side if we replaced the whole line. In all such cases we
+    skip so the user can address the import manually.
     """
-    prefix = start_line[:col]
-    if prefix.strip():
+    if start_line[:start_col].strip():
+        return False
+    if end_line[end_col:].strip():
         return False
     return "#" not in span_source
 

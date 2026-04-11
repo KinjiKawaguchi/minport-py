@@ -533,6 +533,54 @@ class TestFixer:
         assert fix_file(test_file, [violation]) is False
         assert test_file.read_text() == original
 
+    def test_fix_preserves_tab_indentation(self, tmp_path: Path) -> None:
+        """Tab-indented imports keep their tab prefix so the result still parses."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("if True:\n\tfrom x.y.z import A, B\n\tprint(A, B)\n")
+
+        violation = Violation(
+            file_path=test_file,
+            line=2,
+            col=2,
+            original_path="x.y.z",
+            shorter_path="x.y",
+            name="A",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        fix_file(test_file, [violation])
+        content = test_file.read_text()
+
+        assert "\tfrom x.y import A" in content
+        assert "\tfrom x.y.z import B" in content
+        ast.parse(content)  # no TabError
+
+    def test_fix_skips_import_with_trailing_semicolon_code(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Code after an import on the same line blocks the rewrite."""
+        test_file = tmp_path / "test.py"
+        original = "from x.y.z import A; y = 1\n"
+        test_file.write_text(original)
+
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=1,
+            original_path="x.y.z",
+            shorter_path="x.y",
+            name="A",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        assert fix_file(test_file, [violation]) is False
+        assert test_file.read_text() == original
+
     def test_fix_file_without_trailing_newline(self, tmp_path: Path) -> None:
         """A final import line without a trailing newline is handled."""
         test_file = tmp_path / "test.py"
