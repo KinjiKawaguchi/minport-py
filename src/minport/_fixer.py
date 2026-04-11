@@ -14,29 +14,33 @@ if TYPE_CHECKING:
     from minport._models import Violation
 
 
-def fix_file(file_path: Path, violations: list[Violation]) -> bool:
-    """Rewrite *file_path* in place, applying all *violations* as fixes.
+def fix_file(file_path: Path, violations: list[Violation]) -> int:
+    """Rewrite *file_path* in place, returning the number of violations fixed.
 
-    Returns True if the file was modified.
+    The count reflects violations whose ``from X import`` statement was
+    actually rebuilt. Violations that are silently skipped — stale
+    ``original_path``, inline-comment guard, missing alias on the node —
+    are not counted, so ``fix_files`` can report an accurate
+    ``fixes_applied``.
     """
     if not violations:
-        return False
+        return 0
 
     loaded = _load_source(file_path)
     if loaded is None:
-        return False
+        return 0
     source, tree = loaded
 
     lines = source.splitlines(keepends=True)
     by_line = _group_by_line(violations)
     nodes_by_line = _collect_import_nodes(tree, by_line.keys())
 
-    modified = _apply_rewrites(lines, by_line, nodes_by_line)
+    applied = _apply_rewrites(lines, by_line, nodes_by_line)
 
-    if modified:
+    if applied:
         file_path.write_text("".join(lines), encoding="utf-8")
 
-    return modified
+    return applied
 
 
 def _load_source(file_path: Path) -> tuple[str, ast.Module] | None:
@@ -74,20 +78,21 @@ def _apply_rewrites(
     lines: list[str],
     by_line: dict[int, list[Violation]],
     nodes_by_line: dict[int, ast.ImportFrom],
-) -> bool:
-    modified = False
+) -> int:
+    applied = 0
     for lineno in sorted(by_line.keys(), reverse=True):
         node = nodes_by_line.get(lineno)
         if node is None:
             continue
-        replacement = _rebuild_import(node, by_line[lineno], lines)
-        if replacement is None:
+        result = _rebuild_import(node, by_line[lineno], lines)
+        if result is None:
             continue
+        replacement, count = result
         start = node.lineno - 1
         end = node.end_lineno or node.lineno
         lines[start:end] = replacement
-        modified = True
-    return modified
+        applied += count
+    return applied
 
 
 def fix_files(
@@ -98,9 +103,10 @@ def fix_files(
     fixes_applied = 0
 
     for file_path, violations in files_violations.items():
-        if fix_file(file_path, violations):
+        applied = fix_file(file_path, violations)
+        if applied:
             files_modified += 1
-            fixes_applied += len(violations)
+            fixes_applied += applied
 
     return FixResult(files_modified=files_modified, fixes_applied=fixes_applied)
 
@@ -109,8 +115,8 @@ def _rebuild_import(
     node: ast.ImportFrom,
     violations: list[Violation],
     lines: list[str],
-) -> list[str] | None:
-    """Return replacement source lines for *node*, or None to skip."""
+) -> tuple[list[str], int] | None:
+    """Return replacement lines and applied-move count, or None to skip."""
     if not node.module or node.level:
         return None
 
@@ -141,7 +147,8 @@ def _rebuild_import(
 
     rebuilt = [indent + body + "\n" for body in bodies[:-1]]
     rebuilt.append(indent + bodies[-1] + trailing_nl)
-    return rebuilt
+    applied = sum(len(aliases) for aliases in groups.values())
+    return rebuilt, applied
 
 
 def _collect_moves(
