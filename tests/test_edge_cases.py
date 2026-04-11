@@ -429,6 +429,91 @@ if TYPE_CHECKING:
         assert "from .rel import other\n" in content
         assert "from pkg import Thing\n" in content
 
+    def test_fix_skips_whole_line_when_one_name_would_duplicate(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Per-line grouping: line-level rewrite must drop the whole line.
+
+        ``_rewrite_import_line`` replaces the module path for a whole line at
+        once, so keeping any violation on a multi-name line forces every name
+        on it to be shortened. If even one of those names already exists at
+        the shorter path, applying the fix would duplicate it.
+        """
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+        (sub / "__init__.py").write_text("")
+        (sub / "inner.py").write_text("Thing = 1\nOther = 2\n")
+        (pkg / "__init__.py").write_text(
+            "from pkg.sub.inner import Thing\nfrom pkg.sub.inner import Other\n",
+        )
+
+        test_file = tmp_path / "user.py"
+        test_file.write_text(
+            "from pkg import Thing\nfrom pkg.sub.inner import Thing, Other\n",
+        )
+
+        check([test_file], src_roots=[tmp_path], fix=True)
+
+        content = test_file.read_text()
+        # The multi-name line must not have been rewritten — otherwise
+        # Thing would be duplicated by the line-level replacement.
+        assert "from pkg.sub.inner import Thing, Other" in content
+        assert content.count("from pkg import Thing") == 1
+
+    def test_fix_skips_two_violations_colliding_on_same_target(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Inter-violation dedup: if two lines would both reduce to the same
+        ``(shorter, name)``, applying either alone still leaves a duplicate
+        with the other unchanged line. Skip both.
+        """
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub1 = pkg / "sub1"
+        sub1.mkdir()
+        sub2 = pkg / "sub2"
+        sub2.mkdir()
+        (sub1 / "__init__.py").write_text("Thing = 1\n")
+        (sub2 / "__init__.py").write_text("Thing = 2\n")
+        (pkg / "__init__.py").write_text("from pkg.sub1 import Thing\n")
+
+        test_file = tmp_path / "user.py"
+        test_file.write_text(
+            "from pkg.sub1 import Thing as A\nfrom pkg.sub1 import Thing as B\n",
+        )
+
+        check([test_file], src_roots=[tmp_path], fix=True)
+
+        content = test_file.read_text()
+        # Neither line is rewritten: rewriting both would create two
+        # ``from pkg import Thing`` lines.
+        assert "from pkg.sub1 import Thing as A" in content
+        assert "from pkg.sub1 import Thing as B" in content
+        assert "from pkg import Thing" not in content
+
+    def test_fixable_count_excludes_duplicate_skips(self, tmp_path: Path) -> None:
+        """``CheckResult.fixable_count`` must exclude violations the fixer skips."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+        (sub / "__init__.py").write_text("")
+        (sub / "inner.py").write_text("Thing = 1\n")
+        (pkg / "__init__.py").write_text("from pkg.sub.inner import Thing\n")
+
+        test_file = tmp_path / "user.py"
+        test_file.write_text(
+            "from pkg.sub.inner import Thing as _Thing\nfrom pkg import Thing\n",
+        )
+
+        result, _ = check([test_file], src_roots=[tmp_path])
+        assert len(result.violations) == 1
+        assert result.fixable_count == 0
+
     def test_cli_no_paths_no_config(self, monkeypatch, tmp_path: Path) -> None:
         """CLI with no paths and no config src falls back to Path()."""
         (tmp_path / "simple.py").write_text("import os")

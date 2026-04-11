@@ -135,7 +135,7 @@ def _output_text(
         else:
             sys.stdout.write(
                 f"Found {count} error{'s' if count != 1 else ''}"
-                f" ({count} fixable with `minport check --fix`).\n",
+                f" ({result.fixable_count} fixable with `minport check --fix`).\n",
             )
 
 

@@ -71,23 +71,21 @@ def check(
 
     all_violations.sort(key=lambda v: (str(v.file_path), v.line, v.col))
 
+    files_violations: dict[Path, list[Violation]] = {}
+    for v in all_violations:
+        files_violations.setdefault(v.file_path, []).append(v)
+    fixable = {fp: _drop_duplicate_fixes(vs, parsed[fp]) for fp, vs in files_violations.items()}
+    fixable_count = sum(len(vs) for vs in fixable.values())
+
     result = CheckResult(
         violations=tuple(all_violations),
         files_checked=len(parsed),
         files_skipped=len(skipped),
+        fixable_count=fixable_count,
     )
 
     if not fix:
         return result, None
-
-    files_violations: dict[Path, list[Violation]] = {}
-    for v in all_violations:
-        files_violations.setdefault(v.file_path, []).append(v)
-    fixable = {
-        fp: _drop_duplicate_fixes(vs, parsed[fp])
-        for fp, vs in files_violations.items()
-        if fp in parsed
-    }
     return result, fix_files(fixable)
 
 
@@ -184,13 +182,31 @@ def _drop_duplicate_fixes(
     ``from M import N`` on another line, rewriting ``from M.sub import N`` would
     produce a second import of ``(M, N)`` — flagged by ruff F811 / F401.
     Leaving the longer import in place preserves existing bindings.
+
+    Decisions are made per-line because the line-based fixer rewrites the
+    whole module path for a line at once: a single violation keeps the line
+    alive, forcing every name on it to be shortened. So any collision touching
+    a line disqualifies the entire line. We also track the post-fix targets
+    committed so far, so two independent lines that would both reduce to the
+    same ``(shorter, name)`` cannot both slip through.
     """
     existing = _collect_all_from_imports(parsed_file.tree)
-    return [
-        v
-        for v in violations
-        if (v.shorter_path, v.name) not in existing or existing[v.shorter_path, v.name] == v.line
-    ]
+    by_line: dict[int, list[Violation]] = {}
+    for v in violations:
+        by_line.setdefault(v.line, []).append(v)
+
+    lines_per_target: dict[tuple[str, str], int] = {}
+    for line_vs in by_line.values():
+        for target in {(v.shorter_path, v.name) for v in line_vs}:
+            lines_per_target[target] = lines_per_target.get(target, 0) + 1
+
+    kept: list[Violation] = []
+    for line_vs in by_line.values():
+        targets = {(v.shorter_path, v.name) for v in line_vs}
+        if any(t in existing or lines_per_target[t] > 1 for t in targets):
+            continue
+        kept.extend(line_vs)
+    return kept
 
 
 def _collect_all_from_imports(tree: ast.Module) -> dict[tuple[str, str], int]:

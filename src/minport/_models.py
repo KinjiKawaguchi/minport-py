@@ -39,6 +39,7 @@ class CheckResult:
     violations: tuple[Violation, ...]
     files_checked: int
     files_skipped: int
+    fixable_count: int = 0
 
 
 @dataclass(frozen=True)
