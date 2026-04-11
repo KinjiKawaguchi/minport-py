@@ -118,19 +118,25 @@ def _collect_reexported_names(tree: ast.Module) -> set[str]:
 def _collect_assigned_aliases(tree: ast.Module) -> set[str]:
     """Collect top-level ``Name = other.attr`` assignments (re-export aliases).
 
-    Only assignments whose RHS is an attribute access are treated as candidates,
-    to avoid capturing arbitrary value assignments. The caller must intersect
-    with ``__all__`` before treating them as public.
+    Handles both plain ``Assign`` (``Foo = _impl._Foo``) and annotated
+    ``AnnAssign`` (``Foo: type[Base] = _impl._Foo``). Only assignments whose
+    RHS is an attribute access are treated as candidates, to avoid capturing
+    arbitrary value assignments. The caller must intersect with ``__all__``
+    before treating them as public.
     """
     names: set[str] = set()
     for node in ast.iter_child_nodes(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        if not isinstance(node.value, ast.Attribute):
-            continue
-        for target in node.targets:
-            if isinstance(target, ast.Name):
-                names.add(target.id)
+        if isinstance(node, ast.Assign):
+            if not isinstance(node.value, ast.Attribute):
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        elif isinstance(node, ast.AnnAssign):
+            if not isinstance(node.value, ast.Attribute):
+                continue
+            if isinstance(node.target, ast.Name):
+                names.add(node.target.id)
     return names
 
 

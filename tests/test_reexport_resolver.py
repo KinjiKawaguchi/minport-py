@@ -184,6 +184,32 @@ class TestReexportResolver:
         exported = resolver._get_exported_names("pkg")
         assert "Foo" not in exported
 
+    def test_r13_ann_assign_reexport_via_attribute(self, tmp_path: Path) -> None:
+        """R-13d: Annotated assignment Foo: type = _impl._Foo is a re-export."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            'from . import _impl\n\nFoo: type = _impl._Foo\n__all__ = ["Foo"]\n',
+        )
+        (pkg / "_impl.py").write_text("class _Foo:\n    pass\n")
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Foo" in exported
+
+    def test_r13_ann_assign_non_attribute_rhs_excluded(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """R-13e: Foo: int = 1 (non-attribute RHS) is not treated as re-export."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text('Foo: int = 1\n__all__ = ["Foo"]\n')
+
+        resolver = ReexportResolver([tmp_path])
+        exported = resolver._get_exported_names("pkg")
+        assert "Foo" not in exported
+
     def test_r12_star_import_not_recognized(self, tmp_path: Path) -> None:
         """R-12: from .module import * → not recognized as re-export."""
         pkg = tmp_path / "pkg"
