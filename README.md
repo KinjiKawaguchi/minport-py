@@ -97,6 +97,7 @@ For each `from X.Y.Z import Name`:
 3. Re-export detection via AST analysis of `__init__.py`:
    - `from .submodule import Name` — explicit re-export
    - `from .submodule import Name as Name` — PEP 484 explicit form
+   - `from .submodule import *` — wildcard re-export (recursively resolved, respects target's `__all__`)
    - `__all__ = ["Name", ...]` — public API declaration
 4. Return the shortest match (if shorter than the original)
 
@@ -108,7 +109,7 @@ Works with:
 
 - v0.1 does not rewrite `import X.Y.Z` (only `from ... import` statements)
 - Type inference is package-boundary only (no cross-package resolution)
-- Does not analyze `from X import *` or dynamic imports
+- Does not analyze dynamic imports
 - No IDE integration yet
 
 ## pre-commit
