@@ -53,6 +53,7 @@ minport check src/models.py              # Check a single file
 minport check src/ --src src/            # Set import resolution root
 minport check src/ --exclude "tests/*"   # Exclude patterns
 minport check src/ --fix                 # Check and auto-fix
+minport check src/ --quiet               # Suppress the summary line
 ```
 
 **Exit codes:** `0` = no violations, `1` = violations found, `2` = error (e.g. path not found).
