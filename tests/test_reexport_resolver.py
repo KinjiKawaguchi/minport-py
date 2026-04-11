@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
-from minport._reexport_resolver import ReexportResolver
+from minport._reexport_resolver import ReexportResolver, _child_stmt_blocks
 
 
 class TestReexportResolver:
@@ -612,3 +614,97 @@ class TestReexportResolver:
         assert resolver.find_shortest_path("pkg.module", "Name") == "pkg"
         # Other is not in target's __all__ → cannot be shortened.
         assert resolver.find_shortest_path("pkg.module", "Other") is None
+
+    def test_r19_try_except_import_is_recognized(self, tmp_path: Path) -> None:
+        """R-19: Re-export inside try/except is traced by find_shortest_path."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            "try:\n    from ._impl import Foo\nexcept ImportError:\n    from ._impl import Foo\n",
+        )
+        (pkg / "_impl.py").write_text("class Foo: ...\n")
+
+        resolver = ReexportResolver([tmp_path])
+        assert resolver.find_shortest_path("pkg._impl", "Foo") == "pkg"
+
+    def test_r20_if_version_guarded_import_is_recognized(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """R-20: Re-export inside a runtime ``if`` block is traced."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            "import sys\n"
+            "if sys.version_info >= (3, 12):\n"
+            "    from ._impl import Bar\n"
+            "else:\n"
+            "    from ._impl import Bar\n",
+        )
+        (pkg / "_impl.py").write_text("class Bar: ...\n")
+
+        resolver = ReexportResolver([tmp_path])
+        assert resolver.find_shortest_path("pkg._impl", "Bar") == "pkg"
+
+    def test_r21_type_checking_guarded_import_is_excluded(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """R-21: ``if TYPE_CHECKING:`` imports are not runtime re-exports.
+
+        The shorter path must NOT be suggested because the name is not
+        actually available from ``pkg`` at runtime.
+        """
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from ._impl import Baz\n",
+        )
+        (pkg / "_impl.py").write_text("class Baz: ...\n")
+
+        resolver = ReexportResolver([tmp_path])
+        assert resolver.find_shortest_path("pkg._impl", "Baz") is None
+
+    def test_r22_typing_type_checking_attribute_guard(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """R-22: ``if typing.TYPE_CHECKING:`` (attribute form) is also excluded."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            "import typing\nif typing.TYPE_CHECKING:\n    from ._impl import Qux\n",
+        )
+        (pkg / "_impl.py").write_text("class Qux: ...\n")
+
+        resolver = ReexportResolver([tmp_path])
+        assert resolver.find_shortest_path("pkg._impl", "Qux") is None
+
+    def test_r23_try_star_import_is_recognized(self, tmp_path: Path) -> None:
+        """R-23: Re-export inside a ``try/except*`` block (PEP 654) is traced."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            "try:\n"
+            "    from ._impl import Quux\n"
+            "except* ImportError:\n"
+            "    from ._impl import Quux\n",
+        )
+        (pkg / "_impl.py").write_text("class Quux: ...\n")
+
+        resolver = ReexportResolver([tmp_path])
+        assert resolver.find_shortest_path("pkg._impl", "Quux") == "pkg"
+
+    def test_child_stmt_blocks_rejects_unknown_stmt_subclass(self) -> None:
+        """Synthetic ``ast.stmt`` subclass trips the walker's exhaustiveness guard.
+
+        Guards against a future Python grammar extension slipping past the
+        enumerated ``_SKIP_STMTS`` tuple. Any such omission must fail the
+        test suite instead of silently being ignored.
+        """
+
+        class _FakeStmt(ast.stmt):
+            _fields: ClassVar[tuple[str, ...]] = ()
+
+        with pytest.raises(TypeError, match=r"Unhandled ast\.stmt subclass"):
+            list(_child_stmt_blocks(_FakeStmt()))

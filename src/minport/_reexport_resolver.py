@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
+    from typing import NoReturn
 
 Origin = tuple[Path, str]
 
@@ -324,14 +325,123 @@ def _find_installed_origin(module_path: str) -> Path | None:
 
 
 def _collect_reexported_names(tree: ast.Module) -> set[str]:
-    """Collect names from ``from ... import ...`` statements (excluding ``*``)."""
+    """Collect names from ``from ... import ...`` statements (excluding ``*``).
+
+    Walks nested bodies so that imports guarded by ``try/except`` or runtime
+    ``if`` blocks are recognized as re-exports. Imports under
+    ``if TYPE_CHECKING`` are skipped because they are not available at runtime.
+    """
     names: set[str] = set()
-    for node in ast.iter_child_nodes(tree):
+    for node in _iter_runtime_nodes(tree):
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 if alias.name != "*":
                     names.add(alias.asname or alias.name)
     return names
+
+
+def _iter_runtime_nodes(tree: ast.Module) -> Iterator[ast.stmt]:
+    """Yield statements reachable at runtime, skipping TYPE_CHECKING blocks."""
+    yield from _walk_stmts(tree.body)
+
+
+def _walk_stmts(stmts: Sequence[ast.stmt]) -> Iterator[ast.stmt]:
+    for stmt in stmts:
+        if isinstance(stmt, ast.If) and _is_type_checking_guard(stmt.test):
+            yield from _walk_stmts(stmt.orelse)
+            continue
+        yield stmt
+        for child in _child_stmt_blocks(stmt):
+            yield from _walk_stmts(child)
+
+
+_SKIP_STMTS: tuple[type[ast.stmt], ...] = (
+    # Nested scopes: bodies cannot publish module-level bindings at runtime.
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    # Compound hosts that are legal but not realistic re-export sites.
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.With,
+    ast.AsyncWith,
+    ast.Match,
+    # Simple statements with no stmt-body to recurse into.
+    ast.Return,
+    ast.Delete,
+    ast.Assign,
+    ast.AugAssign,
+    ast.AnnAssign,
+    ast.Raise,
+    ast.Assert,
+    ast.Import,
+    ast.ImportFrom,
+    ast.Global,
+    ast.Nonlocal,
+    ast.Expr,
+    ast.Pass,
+    ast.Break,
+    ast.Continue,
+    # PEP 695 ``type X = ...`` (Python 3.12+). Accessed via ``getattr`` so
+    # the expression stays valid on 3.11 where ``ast.TypeAlias`` is absent,
+    # and inlined here so every Python version executes the same single
+    # tuple-literal line (keeps line coverage at 100% across the matrix).
+    # ast.TypeAlias is Python 3.12+; direct access would break 3.11 imports.
+    *(
+        (getattr(ast, "TypeAlias"),) if hasattr(ast, "TypeAlias") else ()  # noqa: B009
+    ),
+)
+
+
+def _child_stmt_blocks(stmt: ast.stmt) -> Iterator[Sequence[ast.stmt]]:
+    """Yield the nested stmt bodies ``_walk_stmts`` should recurse into.
+
+    ``If`` / ``Try`` / ``TryStar`` bodies are walked because re-exports
+    guarded by them still execute at runtime. Every other statement type
+    is enumerated in ``_SKIP_STMTS`` as a deliberate no-op; anything that
+    leaks past both groups hits ``_raise_unhandled_stmt`` so new Python
+    grammar additions surface at test time rather than silently producing
+    wrong results.
+    """
+    if isinstance(stmt, ast.If):
+        yield stmt.body
+        yield stmt.orelse
+        return
+    if isinstance(stmt, (ast.Try, ast.TryStar)):
+        yield stmt.body
+        for handler in stmt.handlers:
+            yield handler.body
+        yield stmt.orelse
+        yield stmt.finalbody
+        return
+    if isinstance(stmt, _SKIP_STMTS):
+        return
+    _raise_unhandled_stmt(stmt)
+
+
+def _raise_unhandled_stmt(stmt: ast.stmt) -> NoReturn:
+    """Fail loudly on an ``ast.stmt`` subclass the walker was not taught about.
+
+    Acts as a runtime ``assert_never`` equivalent. Static exhaustiveness
+    via ``typing.assert_never`` cannot narrow here because ``_SKIP_STMTS``
+    is built dynamically (to accommodate ``ast.TypeAlias`` being absent on
+    Python 3.11), so this helper takes over as the last-line guard.
+    """
+    msg = (
+        "Unhandled ast.stmt subclass in re-export walker: "
+        f"{type(stmt).__name__}. Update _child_stmt_blocks to classify it."
+    )
+    raise TypeError(msg)
+
+
+def _is_type_checking_guard(test: ast.expr) -> bool:
+    """Return True for ``if TYPE_CHECKING`` / ``if typing.TYPE_CHECKING``."""
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    if isinstance(test, ast.Attribute):
+        return test.attr == "TYPE_CHECKING"
+    return False
 
 
 def _collect_assigned_aliases(tree: ast.Module) -> set[str]:
@@ -430,14 +540,15 @@ def _parse_all_assignment(node: ast.Assign) -> set[str] | None:
 
 
 def _find_name_binding(tree: ast.Module, name: str) -> _Binding | None:
-    """Return the last top-level statement that binds *name*, if any.
+    """Return the last statement that binds *name* at runtime, if any.
 
-    Python import semantics follow the last binding wins rule, so for an
-    ``__init__.py`` that contains multiple assignments or imports of the same
-    name, only the final one reflects the runtime namespace.
+    Walks nested ``try/except`` and runtime ``if`` blocks so imports guarded
+    by them are honoured. ``if TYPE_CHECKING:`` branches are skipped because
+    the binding they introduce is not available at runtime. Python's last
+    binding wins rule still applies, so only the final match is returned.
     """
     last: _Binding | None = None
-    for node in ast.iter_child_nodes(tree):
+    for node in _iter_runtime_nodes(tree):
         candidate = _binding_from_node(node, name)
         if candidate is not None:
             last = candidate
