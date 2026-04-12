@@ -7,86 +7,122 @@
 
 A Python linter that finds unnecessarily long import paths and suggests shorter alternatives by tracing re-export chains.
 
-## Problem
+## The Problem
 
 Python packages expose public APIs through re-exports, but developers often import from deep internal paths instead of the canonical public interface:
 
 ```python
-# Before (unnecessarily long)
+# Unnecessarily long — these reach into internal modules
 from pydantic.fields import FieldInfo
 from sqlalchemy.orm.session import Session
 from myproject.domain.user.models import User
 
-print(user.name)  # Still works, but...
+# Shorter — these use the public re-export path
+from pydantic import FieldInfo
+from sqlalchemy.orm import Session
+from myproject.domain import User
 ```
 
-This creates three problems:
+Long import paths are:
 
-1. **Readability**: Internal paths obscure the public interface
-2. **Fragility**: Internal paths break when package maintainers refactor internals (re-exports are the stable API)
-3. **Inconsistency**: Same name imported from different paths across the codebase
+1. **Harder to read**: Internal paths obscure the public interface
+2. **Fragile**: Internal paths break when package maintainers refactor internals (re-exports are the stable API)
+3. **Inconsistent**: Same name imported from different paths across the codebase
 
-## Quick Start
+## Installation
 
 ```bash
 pip install minport
 ```
 
-```python
-# models.py
-from pydantic import FieldInfo  # Correct: shorter public path
-from pydantic.fields import FieldInfo  # Would be flagged as MP001
+```bash
+# or with uv
+uv add --dev minport
 ```
 
 ```bash
+# or with pipx (for global CLI usage)
+pipx install minport
+```
+
+**Requirements:** Python 3.11+ / No runtime dependencies.
+
+## Quick Start
+
+```bash
 minport check src/
-# src/models.py:1:1: MP001 `from pydantic.fields import FieldInfo` can be shortened to `from pydantic import FieldInfo`
+# src/models.py:3:1: MP001 `from pydantic.fields import FieldInfo` can be shortened to `from pydantic import FieldInfo`
+# Found 1 error (checked 12 files, 1 fixable with `minport check --fix`).
+
+minport check src/ --fix
+# Found 1 error (checked 12 files, fixed 1 in 1 file).
 ```
 
 ## Usage
-
-### CLI
 
 ```bash
 minport check src/                       # Check a directory
 minport check src/models.py              # Check a single file
 minport check src/ --src src/            # Set import resolution root
-minport check src/ --exclude "tests/*"   # Exclude patterns
-minport check src/ --fix                 # Check and auto-fix
+minport check src/ --exclude "tests/*"   # Exclude patterns (overrides defaults)
+minport check src/ --extend-exclude "generated/*"  # Add to default excludes
+minport check src/ --config path/to/pyproject.toml  # Custom config path
+minport check src/ --fix                 # Auto-fix in place
 minport check src/ --quiet               # Suppress the summary line
 ```
 
 **Exit codes:** `0` = no violations, `1` = violations found, `2` = error (e.g. path not found).
 
-### With --fix
-
-```bash
-minport check src/ --fix
-# Modifies files in-place. Verify with `git diff` before committing.
-```
-
 ## Configuration
 
+Configure minport in `pyproject.toml`:
+
 ```toml
-# pyproject.toml
 [tool.minport]
-src = ["src"]                    # Import resolution root(s)
-exclude = ["tests/*", "migrations/*"]   # Patterns to exclude
+src = ["src"]                        # Import resolution root(s)
+exclude = ["tests/*", "migrations/*"]  # Exclude patterns (overrides defaults)
+extend-exclude = ["generated/*"]     # Add patterns without overriding defaults
 ```
 
 CLI arguments override `pyproject.toml` settings.
 
+### Default Excludes
+
+minport automatically skips common non-source directories (`.venv`, `__pycache__`, `.git`, `node_modules`, `dist`, `site-packages`, etc.). Use `--exclude` to override these defaults entirely, or `--extend-exclude` to add patterns on top of them.
+
 ## Rules
 
-| Code | Name | Description |
-|------|------|-------------|
-| MP001 | shorter-import-available | A shorter import path is available via re-exports |
+| Code | Name | Description | Fixable |
+|------|------|-------------|---------|
+| MP001 | shorter-import-available | A shorter import path is available via re-exports | Yes |
 
-### Safety
+## Inline Suppression
 
-- **No modifications without `--fix`**: Read-only by default
-- **Collision detection**: If a name exists in multiple paths, the import is not flagged (ambiguous)
-- **Syntax error tolerance**: Malformed Python files are skipped with a warning (doesn't break the entire check)
+Add `# minport: ignore` to suppress violations on specific imports.
+
+**Single-line import:**
+
+```python
+from pydantic.fields import FieldInfo  # minport: ignore
+```
+
+**Multi-line import — suppress all names:**
+
+```python
+from pydantic.fields import (  # minport: ignore
+    FieldInfo,
+    Field,
+)
+```
+
+**Multi-line import — suppress a specific name:**
+
+```python
+from pydantic.fields import (
+    FieldInfo,  # minport: ignore  ← only FieldInfo is suppressed
+    Field,      # ← this can still be flagged
+)
+```
 
 ## How It Works
 
@@ -97,37 +133,59 @@ For each `from X.Y.Z import Name`:
 3. Re-export detection via AST analysis of `__init__.py`:
    - `from .submodule import Name` — explicit re-export
    - `from .submodule import Name as Name` — PEP 484 explicit form
-   - `from .submodule import *` — wildcard re-export (recursively resolved, respects target's `__all__`)
+   - `from .submodule import *` — wildcard (recursively resolved, respects `__all__`)
    - `__all__ = ["Name", ...]` — public API declaration
 4. Return the shortest match (if shorter than the original)
 
-Works with:
-- Project packages (analyzes `src/` and `__init__.py` files)
-- Third-party packages (uses `importlib.util.find_spec` + AST analysis)
+Works with both **project packages** (analyzes `__init__.py` files) and **third-party packages** (uses `importlib.util.find_spec` + AST analysis, no runtime imports).
 
-## Limitations
+### Safety
 
-- v0.1 does not rewrite `import X.Y.Z` (only `from ... import` statements)
-- Type inference is package-boundary only (no cross-package resolution)
-- Does not analyze dynamic imports
-- No IDE integration yet
+- **No modifications without `--fix`**: Read-only by default
+- **Collision detection**: If a name exists in multiple candidate paths, the import is not flagged
+- **Syntax error tolerance**: Malformed Python files are skipped with a warning
+- **`--fix` writes in place**: Always verify changes with `git diff` before committing
 
-## pre-commit
+## Integrations
+
+### pre-commit
 
 ```yaml
 # .pre-commit-config.yaml
 repos:
-  - repo: https://github.com/KinjiKawaguchi/minport
-    rev: v0.1.0
+  - repo: local
     hooks:
       - id: minport
-        args: [check, src/]
-        stages: [commit]
+        name: minport
+        entry: minport check
+        language: python
+        types: [python]
+        additional_dependencies: ["minport"]
 ```
 
-## Contributing
+### GitHub Actions
 
-Development setup:
+```yaml
+# .github/workflows/lint.yml
+jobs:
+  minport:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install minport
+      - run: minport check src/
+```
+
+## Limitations
+
+- Only rewrites `from X.Y.Z import Name` (not `import X.Y.Z`)
+- Does not analyze dynamic or runtime imports
+- No IDE integration yet
+
+## Contributing
 
 ```bash
 git clone https://github.com/KinjiKawaguchi/minport.git
