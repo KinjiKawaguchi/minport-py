@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
 
-from minport._models import DEFAULT_EXCLUDES
+from minport._import_parser import parse_imports
+from minport._models import DEFAULT_EXCLUDES, ImportStatement
 from minport._reexport_resolver import ReexportResolver
-from minport.checker import _has_suppress_comment, _is_excluded, _is_own_init, check
+from minport.checker import (
+    _has_suppress_comment,
+    _init_to_module,
+    _is_excluded,
+    _is_own_init,
+    _is_suppressed,
+    check,
+)
 from minport.cli import main
 
 
@@ -372,23 +381,72 @@ if TYPE_CHECKING:
         f.write_text("")
         assert _is_own_init(f, "pkg", [tmp_path]) is False
 
-    def test_is_own_init_resolve_oserror(self, tmp_path: Path, monkeypatch) -> None:
-        """_is_own_init handles OSError during path resolution gracefully."""
+    def test_init_to_module_file_resolve_oserror(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        """_init_to_module returns None when file_path.resolve() raises OSError."""
         init = tmp_path / "pkg" / "__init__.py"
         init.parent.mkdir()
         init.write_text("")
 
         original_resolve = Path.resolve
-
         msg = "simulated"
 
         def broken_resolve(self, *, strict=False):
-            if self.name == "__init__.py" and "pkg" in str(self):
+            if self == init:
                 raise OSError(msg)
             return original_resolve(self, strict=strict)
 
         monkeypatch.setattr(Path, "resolve", broken_resolve)
+        assert _init_to_module(init, [tmp_path]) is None
         assert _is_own_init(init, "pkg", [tmp_path]) is False
+
+    def test_init_to_module_root_resolve_oserror(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        """_init_to_module skips roots whose resolve() raises OSError."""
+        init = tmp_path / "pkg" / "__init__.py"
+        init.parent.mkdir()
+        init.write_text("")
+
+        original_resolve = Path.resolve
+        msg = "simulated"
+        bad_root = tmp_path / "bad"
+
+        def broken_resolve(self, *, strict=False):
+            if self == bad_root:
+                raise OSError(msg)
+            return original_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", broken_resolve)
+        assert _init_to_module(init, [bad_root, tmp_path]) == "pkg"
+
+    def test_init_to_module_overlapping_roots(self, tmp_path: Path) -> None:
+        """_init_to_module picks the most specific root with overlapping src_roots."""
+        src = tmp_path / "src"
+        pkg = src / "pkg"
+        pkg.mkdir(parents=True)
+        init = pkg / "__init__.py"
+        init.write_text("")
+
+        # Both tmp_path and src match, but src is more specific
+        assert _init_to_module(init, [tmp_path, src]) == "pkg"
+        # Order should not matter
+        assert _init_to_module(init, [src, tmp_path]) == "pkg"
+
+    def test_init_to_module_no_matching_root(self, tmp_path: Path) -> None:
+        """_init_to_module returns None when no src_root contains the file."""
+        init = tmp_path / "pkg" / "__init__.py"
+        init.parent.mkdir()
+        init.write_text("")
+
+        unrelated = tmp_path / "other"
+        unrelated.mkdir()
+        assert _init_to_module(init, [unrelated]) is None
 
     def test_is_excluded_path_not_relative(self) -> None:
         """_is_excluded handles path not relative to base."""
@@ -591,6 +649,58 @@ if TYPE_CHECKING:
                 f"__init__.py must not suggest shortening to its own package: {v}"
             )
 
+    def test_init_ancestor_package_not_reported(self, tmp_path: Path) -> None:
+        """Issue #26: __init__.py must not shorten to an ancestor package.
+
+        ``a/b/__init__.py`` with ``from a.b.c.impl import Hello`` should NOT
+        suggest ``from a import Hello`` when ``a/__init__.py`` re-exports from
+        ``a.b``, because applying the fix would create an indirect circular
+        import chain: ``a.b.__init__`` → ``a.__init__`` → ``a.b.__init__`` (still
+        initializing).
+        """
+        a = tmp_path / "a"
+        b = a / "b"
+        c = b / "c"
+        c.mkdir(parents=True)
+        (a / "__init__.py").write_text('from .b import Hello\n__all__ = ["Hello"]\n')
+        (b / "__init__.py").write_text(
+            'from a.b.c.impl import Hello\n__all__ = ["Hello"]\n',
+        )
+        (c / "__init__.py").write_text(
+            'from a.b.c.impl import Hello\n__all__ = ["Hello"]\n',
+        )
+        (c / "impl.py").write_text("class Hello: ...\n")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        for v in result.violations:
+            if v.file_path.name == "__init__.py":
+                file_parts = v.file_path.parent.relative_to(tmp_path).parts
+                file_pkg = ".".join(file_parts)
+                assert not file_pkg.startswith(f"{v.shorter_path}."), (
+                    f"__init__.py must not shorten to ancestor package: {v}"
+                )
+                assert v.shorter_path != file_pkg, (
+                    f"__init__.py must not shorten to own package: {v}"
+                )
+
+    def test_init_ancestor_fix_no_change(self, tmp_path: Path) -> None:
+        """Issue #26: --fix must not rewrite __init__.py to ancestor import."""
+        a = tmp_path / "a"
+        b = a / "b"
+        c = b / "c"
+        c.mkdir(parents=True)
+        (a / "__init__.py").write_text('from .b import Hello\n__all__ = ["Hello"]\n')
+        b_original = 'from a.b.c.impl import Hello\n__all__ = ["Hello"]\n'
+        (b / "__init__.py").write_text(b_original)
+        (c / "__init__.py").write_text(
+            'from a.b.c.impl import Hello\n__all__ = ["Hello"]\n',
+        )
+        (c / "impl.py").write_text("class Hello: ...\n")
+
+        check([tmp_path], src_roots=[tmp_path], fix=True)
+
+        assert (b / "__init__.py").read_text() == b_original
+
     def test_cli_no_paths_no_config(self, monkeypatch, tmp_path: Path) -> None:
         """CLI with no paths and no config src falls back to Path()."""
         (tmp_path / "simple.py").write_text("import os")
@@ -715,3 +825,162 @@ class TestDefaultExcludes:
         exit_code = main(["check", str(tmp_path), "--config", str(config), "--src", str(tmp_path)])
         # .venv/mod.py is now included (defaults overridden), no violations
         assert exit_code == 0
+
+
+class TestPerNameSuppress:
+    """Tests for per-name # minport: ignore in multi-line imports (Issue #24)."""
+
+    def _make_pkg(self, tmp_path: Path) -> None:
+        """Create a package with re-exports for Foo and Bar."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+        (pkg / "__init__.py").write_text("from .sub.module import Foo, Bar")
+        (sub / "__init__.py").write_text("from .module import Foo, Bar")
+        (sub / "module.py").write_text("Foo = 1\nBar = 2")
+
+    def test_multiline_suppress_single_name(self, tmp_path: Path) -> None:
+        """Suppress comment on individual name line suppresses only that name."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from pkg.sub.module import (\n    Foo,  # minport: ignore\n    Bar,\n)\n"
+        )
+
+        result, _ = check([test_file], src_roots=[tmp_path])
+        names = [v.name for v in result.violations]
+        assert "Foo" not in names
+        assert "Bar" in names
+
+    def test_multiline_suppress_from_line_suppresses_all(self, tmp_path: Path) -> None:
+        """Suppress comment on from line suppresses all names."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from pkg.sub.module import (  # minport: ignore\n    Foo,\n    Bar,\n)\n"
+        )
+
+        result, _ = check([test_file], src_roots=[tmp_path])
+        assert len(result.violations) == 0
+
+    def test_multiline_suppress_multiple_names(self, tmp_path: Path) -> None:
+        """Suppress comments on multiple name lines suppress each independently."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from pkg.sub.module import (\n"
+            "    Foo,  # minport: ignore\n"
+            "    Bar,  # minport: ignore\n"
+            ")\n"
+        )
+
+        result, _ = check([test_file], src_roots=[tmp_path])
+        assert len(result.violations) == 0
+
+    def test_single_line_import_suppress_unchanged(self, tmp_path: Path) -> None:
+        """Single-line import with suppress still works (backward compat)."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from pkg.sub.module import Foo  # minport: ignore\nfrom pkg.sub.module import Bar\n"
+        )
+
+        result, _ = check([test_file], src_roots=[tmp_path])
+        names = [v.name for v in result.violations]
+        assert "Foo" not in names
+        assert "Bar" in names
+
+    def test_is_suppressed_name_line_differs_from_from_line(self) -> None:
+        """_is_suppressed checks name_line when it differs from from line."""
+        imp = ImportStatement(
+            module_path="pkg.sub",
+            name="Foo",
+            alias=None,
+            file_path=Path("test.py"),
+            line=1,
+            col=1,
+            name_line=2,
+        )
+        source_lines = (
+            "from pkg.sub import (",
+            "    Foo,  # minport: ignore",
+            ")",
+        )
+        assert _is_suppressed(imp, source_lines) is True
+
+    def test_is_suppressed_same_line_no_comment(self) -> None:
+        """_is_suppressed returns False when no comment on either line."""
+        imp = ImportStatement(
+            module_path="pkg.sub",
+            name="Foo",
+            alias=None,
+            file_path=Path("test.py"),
+            line=1,
+            col=1,
+            name_line=1,
+        )
+        source_lines = ("from pkg.sub import Foo",)
+        assert _is_suppressed(imp, source_lines) is False
+
+    def test_name_line_in_import_parser(self, tmp_path: Path) -> None:
+        """parse_imports sets name_line from ast.alias.lineno."""
+        source = "from pkg.sub import (\n    Foo,\n    Bar,\n)\n"
+        tree = ast.parse(source)
+        imports = parse_imports(tree, tmp_path / "test.py")
+        assert len(imports) == 2
+        foo = next(i for i in imports if i.name == "Foo")
+        bar = next(i for i in imports if i.name == "Bar")
+        assert foo.line == 1
+        assert foo.name_line == 2
+        assert bar.line == 1
+        assert bar.name_line == 3
+
+    def test_fix_with_per_name_suppress(self, tmp_path: Path) -> None:
+        """--fix rewrites unsuppressed names even when siblings have # minport: ignore."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from pkg.sub.module import (\n    Foo,  # minport: ignore\n    Bar,\n)\n"
+        )
+
+        result, fix_result = check([test_file], src_roots=[tmp_path], fix=True)
+        assert len(result.violations) == 1
+        assert result.violations[0].name == "Bar"
+        assert fix_result is not None
+        assert fix_result.fixes_applied == 1
+
+        content = test_file.read_text()
+        assert "from pkg import Bar" in content
+        assert "from pkg.sub.module import Foo  # minport: ignore" in content
+
+    def test_fix_multiline_all_suppressed_no_change(self, tmp_path: Path) -> None:
+        """--fix does nothing when all names are suppressed."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        original = (
+            "from pkg.sub.module import (\n"
+            "    Foo,  # minport: ignore\n"
+            "    Bar,  # minport: ignore\n"
+            ")\n"
+        )
+        test_file.write_text(original)
+
+        result, fix_result = check([test_file], src_roots=[tmp_path], fix=True)
+        assert len(result.violations) == 0
+        assert fix_result is not None
+        assert fix_result.fixes_applied == 0
+        assert test_file.read_text() == original
+
+    def test_fix_preserves_user_comment_in_import(self, tmp_path: Path) -> None:
+        """--fix still skips imports with non-suppress comments."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        original = "from pkg.sub.module import (\n    Foo,  # important note\n    Bar,\n)\n"
+        test_file.write_text(original)
+
+        result, fix_result = check([test_file], src_roots=[tmp_path], fix=True)
+        assert len(result.violations) == 2
+        assert fix_result is not None
+        assert fix_result.fixes_applied == 0
+        assert test_file.read_text() == original

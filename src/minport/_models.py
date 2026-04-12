@@ -44,6 +44,7 @@ class ImportStatement:
     file_path: Path
     line: int
     col: int
+    name_line: int = 0
 
 
 @dataclass(frozen=True)

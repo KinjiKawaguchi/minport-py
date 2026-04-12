@@ -10,7 +10,14 @@ from typing import TYPE_CHECKING
 
 from minport._fixer import fix_files
 from minport._import_parser import parse_imports
-from minport._models import DEFAULT_EXCLUDES, CheckResult, FixResult, ParsedFile, Violation
+from minport._models import (
+    DEFAULT_EXCLUDES,
+    CheckResult,
+    FixResult,
+    ImportStatement,
+    ParsedFile,
+    Violation,
+)
 from minport._reexport_resolver import ReexportResolver
 
 if TYPE_CHECKING:
@@ -24,15 +31,18 @@ def check(
     *,
     src_roots: Sequence[Path] | None = None,
     exclude: Sequence[str] | None = None,
+    extend_exclude: Sequence[str] = (),
     fix: bool = False,
 ) -> tuple[CheckResult, FixResult | None]:
     """Run the full minport check on the given paths.
 
     When *exclude* is ``None`` (the default), :data:`DEFAULT_EXCLUDES` is used.
     Pass an explicit list to override the defaults entirely.
+    *extend_exclude* patterns are always appended to the effective exclude list.
     """
     effective_src = list(src_roots) if src_roots else _infer_src_roots(paths)
-    effective_exclude = tuple(exclude) if exclude is not None else DEFAULT_EXCLUDES
+    base_exclude = tuple(exclude) if exclude is not None else DEFAULT_EXCLUDES
+    effective_exclude = (*base_exclude, *extend_exclude)
     files = _collect_files(paths, effective_exclude)
 
     resolver = ReexportResolver(effective_src)
@@ -79,7 +89,7 @@ def _find_violations(
     """Detect shortenable imports in a single parsed file."""
     violations: list[Violation] = []
     for imp in parse_imports(pf.tree, file_path):
-        if _has_suppress_comment(imp.line, pf.source_lines):
+        if _is_suppressed(imp, pf.source_lines):
             continue
         shorter = resolver.find_shortest_path(imp.module_path, imp.name)
         if shorter is None:
@@ -246,21 +256,64 @@ def _is_own_init(
     shorter_module: str,
     src_roots: list[Path],
 ) -> bool:
-    """Return True when *file_path* is the ``__init__.py`` of *shorter_module*.
+    """Return True when shortening would cause a circular import.
 
-    Shortening an import to a package whose ``__init__.py`` is the file being
-    checked would create a self-import (partially initialized module error).
+    Two cases are blocked:
+    1. *file_path* is the ``__init__.py`` of *shorter_module* itself (direct
+       self-import → partially initialized module).
+    2. *file_path* is an ``__init__.py`` inside a descendant package of
+       *shorter_module*. The ancestor's ``__init__.py`` may re-export from
+       this package, creating an indirect circular import chain.
     """
     if file_path.name != "__init__.py":
         return False
-    parts = shorter_module.split(".")
+    pkg_module = _init_to_module(file_path, src_roots)
+    if pkg_module is None:
+        return False
+    return pkg_module == shorter_module or pkg_module.startswith(f"{shorter_module}.")
+
+
+def _init_to_module(file_path: Path, src_roots: list[Path]) -> str | None:
+    """Map an ``__init__.py`` path to its dotted module name.
+
+    When multiple *src_roots* overlap (e.g. ``["/project", "/project/src"]``),
+    the most specific root (fewest relative parts) is chosen so that
+    ``/project/src/pkg/__init__.py`` resolves to ``pkg``, not ``src.pkg``.
+    """
+    try:
+        resolved = file_path.resolve()
+    except OSError:
+        return None
+    pkg_dir = resolved.parent
+    best: tuple[str, ...] | None = None
     for root in src_roots:
-        candidate = root / Path(*parts) / "__init__.py"
         try:
-            if file_path.resolve() == candidate.resolve():
-                return True
+            root_resolved = root.resolve()
         except OSError:
             continue
+        try:
+            rel = pkg_dir.relative_to(root_resolved)
+        except ValueError:
+            continue
+        if best is None or len(rel.parts) < len(best):
+            best = rel.parts
+    return ".".join(best) if best is not None else None
+
+
+def _is_suppressed(
+    imp: ImportStatement,
+    source_lines: tuple[str, ...],
+) -> bool:
+    """Check whether *imp* is suppressed by a ``# minport: ignore`` comment.
+
+    Suppressed when the comment appears on either:
+    - the ``from`` line (suppresses all names in the statement), or
+    - the individual name's line in a multi-line import.
+    """
+    if _has_suppress_comment(imp.line, source_lines):
+        return True
+    if imp.name_line != imp.line:
+        return _has_suppress_comment(imp.name_line, source_lines)
     return False
 
 

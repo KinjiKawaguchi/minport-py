@@ -364,3 +364,103 @@ class TestCLI:
         monkeypatch.chdir(tmp_path)
         exit_code = main(["check", "--config", str(config_file)])
         assert exit_code == 0
+
+    def test_extend_exclude_cli(self, tmp_path: Path) -> None:
+        """--extend-exclude adds patterns to the exclude list."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+
+        (pkg / "__init__.py").write_text("")
+        (sub / "__init__.py").write_text("from .module import Name")
+        (sub / "module.py").write_text("Name = 1")
+
+        kept = tmp_path / "kept.py"
+        kept.write_text("from pkg.sub.module import Name")
+        skipped = tmp_path / "skipped.py"
+        skipped.write_text("from pkg.sub.module import Name")
+
+        exit_code = main(
+            [
+                "check",
+                str(tmp_path),
+                "--extend-exclude",
+                "skipped.py",
+                "--src",
+                str(tmp_path),
+            ]
+        )
+        assert exit_code == 1
+
+    def test_extend_exclude_from_pyproject(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """extend-exclude in pyproject.toml adds patterns to the exclude list."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+
+        (pkg / "__init__.py").write_text("")
+        (sub / "__init__.py").write_text("from .module import Name")
+        (sub / "module.py").write_text("Name = 1")
+
+        kept = tmp_path / "kept.py"
+        kept.write_text("from pkg.sub.module import Name")
+        skipped = tmp_path / "gen_file.py"
+        skipped.write_text("from pkg.sub.module import Name")
+
+        config_file = tmp_path / "pyproject.toml"
+        config_file.write_text('[tool.minport]\nextend-exclude = ["gen_file.py"]\n')
+
+        exit_code = main(
+            [
+                "check",
+                str(tmp_path),
+                "--config",
+                str(config_file),
+                "--src",
+                str(tmp_path),
+            ]
+        )
+        captured = capsys.readouterr()
+
+        assert exit_code == 1
+        assert "gen_file.py" not in captured.out
+
+    def test_extend_exclude_merges_with_exclude(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """exclude and extend-exclude are merged together."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+
+        (pkg / "__init__.py").write_text("")
+        (sub / "__init__.py").write_text("from .module import Name")
+        (sub / "module.py").write_text("Name = 1")
+
+        (tmp_path / "a.py").write_text("from pkg.sub.module import Name")
+        (tmp_path / "b.py").write_text("from pkg.sub.module import Name")
+        (tmp_path / "c.py").write_text("from pkg.sub.module import Name")
+
+        exit_code = main(
+            [
+                "check",
+                str(tmp_path),
+                "--exclude",
+                "a.py",
+                "--extend-exclude",
+                "b.py",
+                "--src",
+                str(tmp_path),
+            ]
+        )
+        captured = capsys.readouterr()
+
+        assert exit_code == 1
+        assert "a.py" not in captured.out
+        assert "b.py" not in captured.out
+        assert "c.py" in captured.out
