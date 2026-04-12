@@ -124,9 +124,7 @@ def _rebuild_import(
     start_idx = node.lineno - 1
     end_idx = node.end_lineno or node.lineno
     end_col = node.end_col_offset if node.end_col_offset is not None else len(lines[end_idx - 1])
-    span_source = "".join(lines[start_idx:end_idx])
     if not _is_safe_to_rebuild(
-        span_source,
         start_line=lines[start_idx],
         start_col=node.col_offset,
         end_line=lines[end_idx - 1],
@@ -141,13 +139,17 @@ def _rebuild_import(
 
     indent = lines[start_idx][: node.col_offset]
     trailing_nl = _detect_newline(lines[end_idx - 1])
+    comment = _extract_trailing_comment(lines[start_idx:end_idx])
 
     bodies: list[str] = [_format_from(shorter, groups[shorter]) for shorter in sorted(groups)]
     if remaining:
         bodies.extend(_format_remaining(node.module, remaining, lines))
 
     rebuilt = [indent + body + "\n" for body in bodies[:-1]]
-    rebuilt.append(indent + bodies[-1] + trailing_nl)
+    last = indent + bodies[-1]
+    if comment:
+        last += "  " + comment
+    rebuilt.append(last + trailing_nl)
     applied = sum(len(aliases) for aliases in groups.values())
     return rebuilt, applied
 
@@ -182,26 +184,25 @@ def _partition_aliases(
 
 
 def _is_safe_to_rebuild(
-    span_source: str,
     *,
     start_line: str,
     start_col: int,
     end_line: str,
     end_col: int,
 ) -> bool:
-    """Refuse rewrites that would drop comments or trailing code.
+    """Refuse rewrites that would drop trailing code.
 
-    Multi-line imports with inline ``#`` comments would lose those comments
-    when rebuilt from AST, and ``a = 1; from x import Y; z = 2`` would lose
-    code on either side if we replaced the whole line. In all such cases we
-    skip so the user can address the import manually.
+    ``a = 1; from x import Y; z = 2`` would lose code on either side if we
+    replaced the whole line. In such cases we skip so the user can address the
+    import manually.
+
+    Inline comments (``# noqa`` etc.) are preserved separately by
+    ``_extract_trailing_comment``, so their presence no longer blocks rewrites.
     """
     if start_line[:start_col].strip():
         return False
-    if end_line[end_col:].strip():
-        return False
-    stripped = _SUPPRESS_RE.sub("", span_source)
-    return "#" not in stripped
+    trailing = end_line[end_col:].strip()
+    return not trailing or trailing.startswith("#")
 
 
 _SUPPRESS_RE = re.compile(r"#\s*minport:\s*ignore\b")
@@ -247,6 +248,26 @@ def _format_alias(alias: ast.alias) -> str:
     if alias.asname:
         return f"{alias.name} as {alias.asname}"
     return alias.name
+
+
+def _extract_trailing_comment(span_lines: list[str]) -> str:
+    """Extract inline comments from the import span.
+
+    Scans the span lines for ``#`` comments that are not inside string
+    literals. Returns the first comment found (stripped of trailing
+    whitespace/newline), or an empty string if none. ``# minport: ignore``
+    directives are excluded since they are handled separately by
+    ``_format_remaining``.
+    """
+    for line in span_lines:
+        stripped = line.rstrip("\n\r")
+        idx = stripped.find("#")
+        if idx >= 0:
+            comment = stripped[idx:].rstrip()
+            if _SUPPRESS_RE.match(comment):
+                continue
+            return comment
+    return ""
 
 
 def _detect_newline(line: str) -> str:

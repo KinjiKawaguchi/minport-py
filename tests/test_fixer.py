@@ -467,11 +467,10 @@ class TestFixer:
 
         assert fix_file(test_file, [violation]) == 0
 
-    def test_fix_skips_import_with_inline_comment(self, tmp_path: Path) -> None:
-        """Inline comments on the import line block the rewrite (preserves the comment)."""
+    def test_fix_rewrites_import_with_inline_comment(self, tmp_path: Path) -> None:
+        """Inline comments on the import line are preserved after rewrite."""
         test_file = tmp_path / "test.py"
-        original = "from x.y.z import Name  # keep this\n"
-        test_file.write_text(original)
+        test_file.write_text("from x.y.z import Name  # keep this\n")
 
         violation = Violation(
             file_path=test_file,
@@ -485,8 +484,8 @@ class TestFixer:
             message="test",
         )
 
-        assert fix_file(test_file, [violation]) == 0
-        assert test_file.read_text() == original
+        assert fix_file(test_file, [violation]) == 1
+        assert test_file.read_text() == "from x.y import Name  # keep this\n"
 
     def test_fix_skips_import_after_semicolon(self, tmp_path: Path) -> None:
         """An import preceded by another statement on the same line is left alone."""
@@ -601,13 +600,14 @@ class TestFixer:
         assert fix_file(test_file, [violation]) > 0
         assert test_file.read_text() == "from x.y import Name"
 
-    def test_fixes_applied_excludes_skipped_lines(self, tmp_path: Path) -> None:
-        """Regression for #16.
+    def test_fixes_applied_counts_comment_preserving_rewrites(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Both commented and uncommented import lines are rewritten.
 
-        When a file has multiple violations and one of them is silently
-        skipped by the safety guard (e.g. inline comment on the import
-        line), ``fixes_applied`` must reflect only the rewrites that
-        actually happened — not the raw ``len(violations)``.
+        Since inline comments are now preserved, both violations are
+        applied and ``fixes_applied`` reflects the total count.
         """
         test_file = tmp_path / "test.py"
         test_file.write_text(
@@ -644,13 +644,10 @@ class TestFixer:
         result = fix_files(violations)
 
         assert result.files_modified == 1
-        assert result.fixes_applied == 1, (
-            f"Only line 2 is rewritten (line 1 blocked by comment);"
-            f" fixes_applied should be 1, got {result.fixes_applied}"
-        )
+        assert result.fixes_applied == 2
 
         content = test_file.read_text()
-        assert "from pkg.sub.module import A  # keep this comment" in content
+        assert "from pkg.sub import A  # keep this comment" in content
         assert "from other.deep import B" in content
 
     def test_fixes_applied_excludes_stale_violations(self, tmp_path: Path) -> None:
@@ -697,6 +694,55 @@ class TestFixer:
 
         assert result.files_modified == 1
         assert result.fixes_applied == 1
+
+    def test_fix_preserves_inline_comment(self, tmp_path: Path) -> None:
+        """Issue #29: --fix rewrites import while preserving inline comment."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from x.y.z import Name  # noqa: E402\n",
+        )
+
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=1,
+            original_path="x.y.z",
+            shorter_path="x.y",
+            name="Name",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        applied = fix_file(test_file, [violation])
+        assert applied == 1
+        content = test_file.read_text()
+        assert content == "from x.y import Name  # noqa: E402\n"
+
+    def test_fix_preserves_multiline_import_with_comment(self, tmp_path: Path) -> None:
+        """Issue #29: Multi-line import with comment on first line is fixed."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from x.y.z import (  # noqa: E402\n    Name,\n)\n",
+        )
+
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=1,
+            original_path="x.y.z",
+            shorter_path="x.y",
+            name="Name",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        applied = fix_file(test_file, [violation])
+        assert applied == 1
+        content = test_file.read_text()
+        assert "from x.y import Name" in content
+        assert "# noqa: E402" in content
 
     def test_fix_with_import_not_matching_pattern(self, tmp_path: Path) -> None:
         """Test: When import pattern doesn't match, line is left unchanged."""
