@@ -91,16 +91,17 @@ def _handle_check(args: argparse.Namespace) -> int:
         paths = [Path()]
 
     src_roots: list[Path] | None = args.src_roots or None
-    exclude = args.exclude or _config_str_list(config, "exclude", [])
+    exclude: list[str] | None = args.exclude or _config_str_list_or_none(config, "exclude")
     extend_exclude = args.extend_exclude or _config_str_list(config, "extend-exclude", [])
-    exclude = [*exclude, *extend_exclude]
 
     for p in paths:
         if not p.exists():
             sys.stderr.write(f"Error: path does not exist: {p}\n")
             return 2
 
-    check_result, fix_result = check(paths, src_roots=src_roots, exclude=exclude, fix=args.fix)
+    check_result, fix_result = check(
+        paths, src_roots=src_roots, exclude=exclude, extend_exclude=extend_exclude, fix=args.fix
+    )
     _output_text(check_result, fix_result, quiet=args.quiet)
 
     return 1 if check_result.violations else 0
@@ -131,6 +132,14 @@ def _config_str_list(config: dict[str, object], key: str, default: list[str]) ->
     if isinstance(value, list) and all(isinstance(v, str) for v in value):
         return [str(v) for v in value]
     return default
+
+
+def _config_str_list_or_none(config: dict[str, object], key: str) -> list[str] | None:
+    """Extract a list-of-strings value from config, returning ``None`` if absent."""
+    value = config.get(key)
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return [str(v) for v in value]
+    return None
 
 
 def _output_text(

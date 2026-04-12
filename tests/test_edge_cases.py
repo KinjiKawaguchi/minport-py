@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from minport._models import DEFAULT_EXCLUDES
 from minport._reexport_resolver import ReexportResolver
-from minport.checker import _has_suppress_comment, _is_excluded, check
+from minport.checker import _has_suppress_comment, _is_excluded, _is_own_init, check
 from minport.cli import main
 
 
@@ -365,6 +366,30 @@ if TYPE_CHECKING:
         exit_code = main(["check"])
         assert exit_code == 0
 
+    def test_is_own_init_non_init_file(self, tmp_path: Path) -> None:
+        """_is_own_init returns False for non-__init__.py files."""
+        f = tmp_path / "module.py"
+        f.write_text("")
+        assert _is_own_init(f, "pkg", [tmp_path]) is False
+
+    def test_is_own_init_resolve_oserror(self, tmp_path: Path, monkeypatch) -> None:
+        """_is_own_init handles OSError during path resolution gracefully."""
+        init = tmp_path / "pkg" / "__init__.py"
+        init.parent.mkdir()
+        init.write_text("")
+
+        original_resolve = Path.resolve
+
+        msg = "simulated"
+
+        def broken_resolve(self, *, strict=False):
+            if self.name == "__init__.py" and "pkg" in str(self):
+                raise OSError(msg)
+            return original_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", broken_resolve)
+        assert _is_own_init(init, "pkg", [tmp_path]) is False
+
     def test_is_excluded_path_not_relative(self) -> None:
         """_is_excluded handles path not relative to base."""
         result = _is_excluded(Path("/elsewhere/file.py"), Path("/some/base"), ["*.py"])
@@ -514,6 +539,58 @@ if TYPE_CHECKING:
         assert len(result.violations) == 1
         assert result.fixable_count == 0
 
+    def test_init_self_import_not_reported(self, tmp_path: Path) -> None:
+        """Issue #18: __init__.py must not suggest shortening to its own package.
+
+        ``pkg/__init__.py`` containing ``from pkg.sub import Hello`` should NOT
+        be reported as shortenable to ``from pkg import Hello``, because the
+        file itself *is* ``pkg/__init__.py`` — applying the fix would create a
+        self-import and raise ``ImportError`` (partially initialized module).
+        """
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            'from pkg.sub import Hello\n__all__ = ["Hello"]\n',
+        )
+        (pkg / "sub.py").write_text("class Hello: ...\n")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        hello_violations = [v for v in result.violations if v.name == "Hello"]
+        assert hello_violations == [], (
+            f"__init__.py must not suggest self-import, got: {hello_violations}"
+        )
+
+    def test_init_self_import_fix_no_change(self, tmp_path: Path) -> None:
+        """Issue #18: --fix must not rewrite __init__.py to self-import."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        original = 'from pkg.sub import Hello\n__all__ = ["Hello"]\n'
+        (pkg / "__init__.py").write_text(original)
+        (pkg / "sub.py").write_text("class Hello: ...\n")
+
+        check([tmp_path], src_roots=[tmp_path], fix=True)
+
+        assert (pkg / "__init__.py").read_text() == original
+
+    def test_deep_init_self_import_not_reported(self, tmp_path: Path) -> None:
+        """Issue #18: Deep nesting — a/b/c/__init__.py must not shorten to a.b.c."""
+        a = tmp_path / "a"
+        b = a / "b"
+        c = b / "c"
+        c.mkdir(parents=True)
+        (a / "__init__.py").write_text("")
+        (b / "__init__.py").write_text("")
+        (c / "__init__.py").write_text("from a.b.c.d import Name\n")
+        (c / "d.py").write_text("Name = 1\n")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        name_violations = [v for v in result.violations if v.name == "Name"]
+        # a.b.c/__init__.py → should not suggest "from a.b.c import Name"
+        for v in name_violations:
+            assert v.shorter_path != "a.b.c", (
+                f"__init__.py must not suggest shortening to its own package: {v}"
+            )
+
     def test_cli_no_paths_no_config(self, monkeypatch, tmp_path: Path) -> None:
         """CLI with no paths and no config src falls back to Path()."""
         (tmp_path / "simple.py").write_text("import os")
@@ -524,4 +601,117 @@ if TYPE_CHECKING:
         config = tmp_path / "empty.toml"
         config.write_text("[tool.minport]\nsrc = []")
         exit_code = main(["check", "--config", str(config)])
+        assert exit_code == 0
+
+
+class TestDefaultExcludes:
+    """Tests for default exclude patterns (Issue #19)."""
+
+    def test_default_excludes_skips_venv(self, tmp_path: Path) -> None:
+        """Files inside .venv are excluded by default."""
+        venv = tmp_path / ".venv" / "lib" / "site-packages" / "pkg"
+        venv.mkdir(parents=True)
+        (venv / "module.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        assert result.files_checked == 1
+
+    def test_default_excludes_skips_pycache(self, tmp_path: Path) -> None:
+        """Files inside __pycache__ are excluded by default."""
+        cache = tmp_path / "__pycache__"
+        cache.mkdir()
+        (cache / "module.cpython-312.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        assert result.files_checked == 1
+
+    def test_default_excludes_skips_node_modules(self, tmp_path: Path) -> None:
+        """Files inside node_modules are excluded by default."""
+        nm = tmp_path / "node_modules" / "some_tool"
+        nm.mkdir(parents=True)
+        (nm / "helper.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        assert result.files_checked == 1
+
+    def test_explicit_exclude_overrides_defaults(self, tmp_path: Path) -> None:
+        """Passing exclude= overrides DEFAULT_EXCLUDES entirely."""
+        venv = tmp_path / ".venv"
+        venv.mkdir()
+        (venv / "mod.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+        (tmp_path / "skip.py").write_text("import os")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path], exclude=["skip.py"])
+        # .venv is no longer excluded (defaults overridden), but skip.py is
+        assert result.files_checked == 2  # app.py + .venv/mod.py
+
+    def test_explicit_empty_exclude_disables_defaults(self, tmp_path: Path) -> None:
+        """Passing exclude=[] disables all default excludes."""
+        venv = tmp_path / ".venv"
+        venv.mkdir()
+        (venv / "mod.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path], exclude=[])
+        assert result.files_checked == 2  # app.py + .venv/mod.py
+
+    def test_default_excludes_constant_contains_expected_entries(self) -> None:
+        """DEFAULT_EXCLUDES contains the key entries from the Issue."""
+        expected = {
+            ".venv",
+            "venv",
+            "__pycache__",
+            "node_modules",
+            "dist",
+            "site-packages",
+            ".git",
+        }
+        assert expected.issubset(set(DEFAULT_EXCLUDES))
+
+    def test_default_excludes_prunes_nested_directories(self, tmp_path: Path) -> None:
+        """Default excludes prune entire directory trees, not just top-level."""
+        deep = tmp_path / "src" / ".mypy_cache" / "sub" / "deep"
+        deep.mkdir(parents=True)
+        (deep / "cached.py").write_text("import sys")
+
+        (tmp_path / "src").mkdir(exist_ok=True)
+        (tmp_path / "src" / "app.py").write_text("import os")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        assert result.files_checked == 1
+
+    def test_cli_exclude_overrides_defaults(self, tmp_path: Path) -> None:
+        """CLI --exclude overrides default excludes."""
+        venv = tmp_path / ".venv"
+        venv.mkdir()
+        (venv / "mod.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+        (tmp_path / "skip.py").write_text("import os")
+
+        exit_code = main(["check", str(tmp_path), "--exclude", "skip.py", "--src", str(tmp_path)])
+        assert exit_code == 0  # .venv/mod.py + app.py checked, no violations
+
+    def test_config_exclude_overrides_defaults(self, tmp_path: Path) -> None:
+        """pyproject.toml exclude overrides default excludes."""
+        venv = tmp_path / ".venv"
+        venv.mkdir()
+        (venv / "mod.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+
+        config = tmp_path / "pyproject.toml"
+        config.write_text('[tool.minport]\nexclude = ["skip.py"]\n')
+
+        exit_code = main(["check", str(tmp_path), "--config", str(config), "--src", str(tmp_path)])
+        # .venv/mod.py is now included (defaults overridden), no violations
         assert exit_code == 0
