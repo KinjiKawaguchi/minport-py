@@ -10,7 +10,14 @@ from typing import TYPE_CHECKING
 
 from minport._fixer import fix_files
 from minport._import_parser import parse_imports
-from minport._models import DEFAULT_EXCLUDES, CheckResult, FixResult, ParsedFile, Violation
+from minport._models import (
+    DEFAULT_EXCLUDES,
+    CheckResult,
+    FixResult,
+    ImportStatement,
+    ParsedFile,
+    Violation,
+)
 from minport._reexport_resolver import ReexportResolver
 
 if TYPE_CHECKING:
@@ -82,7 +89,7 @@ def _find_violations(
     """Detect shortenable imports in a single parsed file."""
     violations: list[Violation] = []
     for imp in parse_imports(pf.tree, file_path):
-        if _has_suppress_comment(imp.line, pf.source_lines):
+        if _is_suppressed(imp, pf.source_lines):
             continue
         shorter = resolver.find_shortest_path(imp.module_path, imp.name)
         if shorter is None:
@@ -291,6 +298,23 @@ def _init_to_module(file_path: Path, src_roots: list[Path]) -> str | None:
         if best is None or len(rel.parts) < len(best):
             best = rel.parts
     return ".".join(best) if best is not None else None
+
+
+def _is_suppressed(
+    imp: ImportStatement,
+    source_lines: tuple[str, ...],
+) -> bool:
+    """Check whether *imp* is suppressed by a ``# minport: ignore`` comment.
+
+    Suppressed when the comment appears on either:
+    - the ``from`` line (suppresses all names in the statement), or
+    - the individual name's line in a multi-line import.
+    """
+    if _has_suppress_comment(imp.line, source_lines):
+        return True
+    if imp.name_line != imp.line:
+        return _has_suppress_comment(imp.name_line, source_lines)
+    return False
 
 
 def _has_suppress_comment(lineno: int, source_lines: tuple[str, ...]) -> bool:
