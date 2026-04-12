@@ -24,15 +24,18 @@ def check(
     *,
     src_roots: Sequence[Path] | None = None,
     exclude: Sequence[str] | None = None,
+    extend_exclude: Sequence[str] = (),
     fix: bool = False,
 ) -> tuple[CheckResult, FixResult | None]:
     """Run the full minport check on the given paths.
 
     When *exclude* is ``None`` (the default), :data:`DEFAULT_EXCLUDES` is used.
     Pass an explicit list to override the defaults entirely.
+    *extend_exclude* patterns are always appended to the effective exclude list.
     """
     effective_src = list(src_roots) if src_roots else _infer_src_roots(paths)
-    effective_exclude = tuple(exclude) if exclude is not None else DEFAULT_EXCLUDES
+    base_exclude = tuple(exclude) if exclude is not None else DEFAULT_EXCLUDES
+    effective_exclude = (*base_exclude, *extend_exclude)
     files = _collect_files(paths, effective_exclude)
 
     resolver = ReexportResolver(effective_src)
