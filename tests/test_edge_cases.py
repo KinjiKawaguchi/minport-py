@@ -8,7 +8,13 @@ import pytest
 
 from minport._models import DEFAULT_EXCLUDES
 from minport._reexport_resolver import ReexportResolver
-from minport.checker import _has_suppress_comment, _is_excluded, _is_own_init, check
+from minport.checker import (
+    _has_suppress_comment,
+    _init_to_module,
+    _is_excluded,
+    _is_own_init,
+    check,
+)
 from minport.cli import main
 
 
@@ -372,23 +378,72 @@ if TYPE_CHECKING:
         f.write_text("")
         assert _is_own_init(f, "pkg", [tmp_path]) is False
 
-    def test_is_own_init_resolve_oserror(self, tmp_path: Path, monkeypatch) -> None:
-        """_is_own_init handles OSError during path resolution gracefully."""
+    def test_init_to_module_file_resolve_oserror(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        """_init_to_module returns None when file_path.resolve() raises OSError."""
         init = tmp_path / "pkg" / "__init__.py"
         init.parent.mkdir()
         init.write_text("")
 
         original_resolve = Path.resolve
-
         msg = "simulated"
 
         def broken_resolve(self, *, strict=False):
-            if self.name == "__init__.py" and "pkg" in str(self):
+            if self == init:
                 raise OSError(msg)
             return original_resolve(self, strict=strict)
 
         monkeypatch.setattr(Path, "resolve", broken_resolve)
+        assert _init_to_module(init, [tmp_path]) is None
         assert _is_own_init(init, "pkg", [tmp_path]) is False
+
+    def test_init_to_module_root_resolve_oserror(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        """_init_to_module skips roots whose resolve() raises OSError."""
+        init = tmp_path / "pkg" / "__init__.py"
+        init.parent.mkdir()
+        init.write_text("")
+
+        original_resolve = Path.resolve
+        msg = "simulated"
+        bad_root = tmp_path / "bad"
+
+        def broken_resolve(self, *, strict=False):
+            if self == bad_root:
+                raise OSError(msg)
+            return original_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", broken_resolve)
+        assert _init_to_module(init, [bad_root, tmp_path]) == "pkg"
+
+    def test_init_to_module_overlapping_roots(self, tmp_path: Path) -> None:
+        """_init_to_module picks the most specific root with overlapping src_roots."""
+        src = tmp_path / "src"
+        pkg = src / "pkg"
+        pkg.mkdir(parents=True)
+        init = pkg / "__init__.py"
+        init.write_text("")
+
+        # Both tmp_path and src match, but src is more specific
+        assert _init_to_module(init, [tmp_path, src]) == "pkg"
+        # Order should not matter
+        assert _init_to_module(init, [src, tmp_path]) == "pkg"
+
+    def test_init_to_module_no_matching_root(self, tmp_path: Path) -> None:
+        """_init_to_module returns None when no src_root contains the file."""
+        init = tmp_path / "pkg" / "__init__.py"
+        init.parent.mkdir()
+        init.write_text("")
+
+        unrelated = tmp_path / "other"
+        unrelated.mkdir()
+        assert _init_to_module(init, [unrelated]) is None
 
     def test_is_excluded_path_not_relative(self) -> None:
         """_is_excluded handles path not relative to base."""
@@ -590,6 +645,58 @@ if TYPE_CHECKING:
             assert v.shorter_path != "a.b.c", (
                 f"__init__.py must not suggest shortening to its own package: {v}"
             )
+
+    def test_init_ancestor_package_not_reported(self, tmp_path: Path) -> None:
+        """Issue #26: __init__.py must not shorten to an ancestor package.
+
+        ``a/b/__init__.py`` with ``from a.b.c.impl import Hello`` should NOT
+        suggest ``from a import Hello`` when ``a/__init__.py`` re-exports from
+        ``a.b``, because applying the fix would create an indirect circular
+        import chain: ``a.b.__init__`` → ``a.__init__`` → ``a.b.__init__`` (still
+        initializing).
+        """
+        a = tmp_path / "a"
+        b = a / "b"
+        c = b / "c"
+        c.mkdir(parents=True)
+        (a / "__init__.py").write_text('from .b import Hello\n__all__ = ["Hello"]\n')
+        (b / "__init__.py").write_text(
+            'from a.b.c.impl import Hello\n__all__ = ["Hello"]\n',
+        )
+        (c / "__init__.py").write_text(
+            'from a.b.c.impl import Hello\n__all__ = ["Hello"]\n',
+        )
+        (c / "impl.py").write_text("class Hello: ...\n")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        for v in result.violations:
+            if v.file_path.name == "__init__.py":
+                file_parts = v.file_path.parent.relative_to(tmp_path).parts
+                file_pkg = ".".join(file_parts)
+                assert not file_pkg.startswith(f"{v.shorter_path}."), (
+                    f"__init__.py must not shorten to ancestor package: {v}"
+                )
+                assert v.shorter_path != file_pkg, (
+                    f"__init__.py must not shorten to own package: {v}"
+                )
+
+    def test_init_ancestor_fix_no_change(self, tmp_path: Path) -> None:
+        """Issue #26: --fix must not rewrite __init__.py to ancestor import."""
+        a = tmp_path / "a"
+        b = a / "b"
+        c = b / "c"
+        c.mkdir(parents=True)
+        (a / "__init__.py").write_text('from .b import Hello\n__all__ = ["Hello"]\n')
+        b_original = 'from a.b.c.impl import Hello\n__all__ = ["Hello"]\n'
+        (b / "__init__.py").write_text(b_original)
+        (c / "__init__.py").write_text(
+            'from a.b.c.impl import Hello\n__all__ = ["Hello"]\n',
+        )
+        (c / "impl.py").write_text("class Hello: ...\n")
+
+        check([tmp_path], src_roots=[tmp_path], fix=True)
+
+        assert (b / "__init__.py").read_text() == b_original
 
     def test_cli_no_paths_no_config(self, monkeypatch, tmp_path: Path) -> None:
         """CLI with no paths and no config src falls back to Path()."""
