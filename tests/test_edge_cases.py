@@ -422,6 +422,19 @@ if TYPE_CHECKING:
         monkeypatch.setattr(Path, "resolve", broken_resolve)
         assert _init_to_module(init, [bad_root, tmp_path]) == "pkg"
 
+    def test_init_to_module_overlapping_roots(self, tmp_path: Path) -> None:
+        """_init_to_module picks the most specific root with overlapping src_roots."""
+        src = tmp_path / "src"
+        pkg = src / "pkg"
+        pkg.mkdir(parents=True)
+        init = pkg / "__init__.py"
+        init.write_text("")
+
+        # Both tmp_path and src match, but src is more specific
+        assert _init_to_module(init, [tmp_path, src]) == "pkg"
+        # Order should not matter
+        assert _init_to_module(init, [src, tmp_path]) == "pkg"
+
     def test_init_to_module_no_matching_root(self, tmp_path: Path) -> None:
         """_init_to_module returns None when no src_root contains the file."""
         init = tmp_path / "pkg" / "__init__.py"
