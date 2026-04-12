@@ -862,6 +862,32 @@ class TestFixer:
         assert "from x import A  # noqa: E402" in content
         assert "minport: ignore" not in content
 
+    def test_fix_suppress_with_trailing_text_discarded(self, tmp_path: Path) -> None:
+        """'# minport: ignore because reasons' does not produce bare text suffix."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from x.y.z import (\n    A,\n    B,  # minport: ignore because reasons\n)\n",
+        )
+
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=1,
+            original_path="x.y.z",
+            shorter_path="x",
+            name="A",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        applied = fix_file(test_file, [violation])
+        assert applied == 1
+        content = test_file.read_text()
+        # No bare text appended — only valid comments allowed
+        assert "because reasons" not in content.split("\n")[0]
+        assert "from x import A\n" in content
+
     def test_fix_no_doubled_comment_with_suppress(self, tmp_path: Path) -> None:
         """Comment is not doubled when _format_remaining already adds # minport: ignore."""
         test_file = tmp_path / "test.py"

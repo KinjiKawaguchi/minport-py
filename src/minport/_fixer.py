@@ -273,7 +273,7 @@ def _extract_trailing_comment(span_lines: list[str]) -> str:
         if not stripped[:idx].strip():
             continue
         comment = _SUPPRESS_RE.sub("", stripped[idx:]).strip()
-        if not comment:
+        if not comment or not comment.startswith("#"):
             continue
         return comment
     return ""
