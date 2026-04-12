@@ -4,6 +4,35 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
+DEFAULT_EXCLUDES: tuple[str, ...] = (
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "__pycache__",
+    "_build",
+    "buck-out",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+)
+
 
 @dataclass(frozen=True)
 class ImportStatement:

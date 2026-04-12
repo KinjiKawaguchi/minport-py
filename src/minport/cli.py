@@ -85,7 +85,7 @@ def _handle_check(args: argparse.Namespace) -> int:
         paths = [Path()]
 
     src_roots: list[Path] | None = args.src_roots or None
-    exclude = args.exclude or _config_str_list(config, "exclude", [])
+    exclude: list[str] | None = args.exclude or _config_str_list_or_none(config, "exclude")
 
     for p in paths:
         if not p.exists():
@@ -123,6 +123,14 @@ def _config_str_list(config: dict[str, object], key: str, default: list[str]) ->
     if isinstance(value, list) and all(isinstance(v, str) for v in value):
         return [str(v) for v in value]
     return default
+
+
+def _config_str_list_or_none(config: dict[str, object], key: str) -> list[str] | None:
+    """Extract a list-of-strings value from config, returning ``None`` if absent."""
+    value = config.get(key)
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return [str(v) for v in value]
+    return None
 
 
 def _output_text(

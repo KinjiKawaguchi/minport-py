@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from minport._models import DEFAULT_EXCLUDES
 from minport._reexport_resolver import ReexportResolver
 from minport.checker import _has_suppress_comment, _is_excluded, check
 from minport.cli import main
@@ -524,4 +525,117 @@ if TYPE_CHECKING:
         config = tmp_path / "empty.toml"
         config.write_text("[tool.minport]\nsrc = []")
         exit_code = main(["check", "--config", str(config)])
+        assert exit_code == 0
+
+
+class TestDefaultExcludes:
+    """Tests for default exclude patterns (Issue #19)."""
+
+    def test_default_excludes_skips_venv(self, tmp_path: Path) -> None:
+        """Files inside .venv are excluded by default."""
+        venv = tmp_path / ".venv" / "lib" / "site-packages" / "pkg"
+        venv.mkdir(parents=True)
+        (venv / "module.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        assert result.files_checked == 1
+
+    def test_default_excludes_skips_pycache(self, tmp_path: Path) -> None:
+        """Files inside __pycache__ are excluded by default."""
+        cache = tmp_path / "__pycache__"
+        cache.mkdir()
+        (cache / "module.cpython-312.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        assert result.files_checked == 1
+
+    def test_default_excludes_skips_node_modules(self, tmp_path: Path) -> None:
+        """Files inside node_modules are excluded by default."""
+        nm = tmp_path / "node_modules" / "some_tool"
+        nm.mkdir(parents=True)
+        (nm / "helper.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        assert result.files_checked == 1
+
+    def test_explicit_exclude_overrides_defaults(self, tmp_path: Path) -> None:
+        """Passing exclude= overrides DEFAULT_EXCLUDES entirely."""
+        venv = tmp_path / ".venv"
+        venv.mkdir()
+        (venv / "mod.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+        (tmp_path / "skip.py").write_text("import os")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path], exclude=["skip.py"])
+        # .venv is no longer excluded (defaults overridden), but skip.py is
+        assert result.files_checked == 2  # app.py + .venv/mod.py
+
+    def test_explicit_empty_exclude_disables_defaults(self, tmp_path: Path) -> None:
+        """Passing exclude=[] disables all default excludes."""
+        venv = tmp_path / ".venv"
+        venv.mkdir()
+        (venv / "mod.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path], exclude=[])
+        assert result.files_checked == 2  # app.py + .venv/mod.py
+
+    def test_default_excludes_constant_contains_expected_entries(self) -> None:
+        """DEFAULT_EXCLUDES contains the key entries from the Issue."""
+        expected = {
+            ".venv",
+            "venv",
+            "__pycache__",
+            "node_modules",
+            "dist",
+            "site-packages",
+            ".git",
+        }
+        assert expected.issubset(set(DEFAULT_EXCLUDES))
+
+    def test_default_excludes_prunes_nested_directories(self, tmp_path: Path) -> None:
+        """Default excludes prune entire directory trees, not just top-level."""
+        deep = tmp_path / "src" / ".mypy_cache" / "sub" / "deep"
+        deep.mkdir(parents=True)
+        (deep / "cached.py").write_text("import sys")
+
+        (tmp_path / "src").mkdir(exist_ok=True)
+        (tmp_path / "src" / "app.py").write_text("import os")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        assert result.files_checked == 1
+
+    def test_cli_exclude_overrides_defaults(self, tmp_path: Path) -> None:
+        """CLI --exclude overrides default excludes."""
+        venv = tmp_path / ".venv"
+        venv.mkdir()
+        (venv / "mod.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+        (tmp_path / "skip.py").write_text("import os")
+
+        exit_code = main(["check", str(tmp_path), "--exclude", "skip.py", "--src", str(tmp_path)])
+        assert exit_code == 0  # .venv/mod.py + app.py checked, no violations
+
+    def test_config_exclude_overrides_defaults(self, tmp_path: Path) -> None:
+        """pyproject.toml exclude overrides default excludes."""
+        venv = tmp_path / ".venv"
+        venv.mkdir()
+        (venv / "mod.py").write_text("import sys")
+
+        (tmp_path / "app.py").write_text("import os")
+
+        config = tmp_path / "pyproject.toml"
+        config.write_text('[tool.minport]\nexclude = ["skip.py"]\n')
+
+        exit_code = main(["check", str(tmp_path), "--config", str(config), "--src", str(tmp_path)])
+        # .venv/mod.py is now included (defaults overridden), no violations
         assert exit_code == 0
