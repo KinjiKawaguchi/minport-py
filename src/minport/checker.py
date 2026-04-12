@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from minport._fixer import fix_files
 from minport._import_parser import parse_imports
-from minport._models import CheckResult, FixResult, ParsedFile, Violation
+from minport._models import DEFAULT_EXCLUDES, CheckResult, FixResult, ParsedFile, Violation
 from minport._reexport_resolver import ReexportResolver
 
 if TYPE_CHECKING:
@@ -23,12 +23,17 @@ def check(
     paths: Sequence[Path],
     *,
     src_roots: Sequence[Path] | None = None,
-    exclude: Sequence[str] = (),
+    exclude: Sequence[str] | None = None,
     fix: bool = False,
 ) -> tuple[CheckResult, FixResult | None]:
-    """Run the full minport check on the given paths."""
+    """Run the full minport check on the given paths.
+
+    When *exclude* is ``None`` (the default), :data:`DEFAULT_EXCLUDES` is used.
+    Pass an explicit list to override the defaults entirely.
+    """
     effective_src = list(src_roots) if src_roots else _infer_src_roots(paths)
-    files = _collect_files(paths, exclude)
+    effective_exclude = tuple(exclude) if exclude is not None else DEFAULT_EXCLUDES
+    files = _collect_files(paths, effective_exclude)
 
     resolver = ReexportResolver(effective_src)
 
@@ -106,6 +111,7 @@ def _collect_files(
     exclude: Sequence[str],
 ) -> list[Path]:
     """Collect all .py files from the given paths."""
+    exclude_set = frozenset(exclude)
     files: list[Path] = []
     seen: set[Path] = set()
 
@@ -117,7 +123,8 @@ def _collect_files(
                 seen.add(real)
                 files.append(resolved)
         elif resolved.is_dir():
-            for root, _, filenames in os.walk(resolved):
+            for root, dirs, filenames in os.walk(resolved):
+                dirs[:] = [d for d in dirs if d not in exclude_set]
                 for name in filenames:
                     fp = Path(root) / name
                     if fp.suffix != ".py":
