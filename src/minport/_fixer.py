@@ -146,8 +146,8 @@ def _rebuild_import(
         bodies.extend(_format_remaining(node.module, remaining, lines))
 
     suffix = f"  {comment}" if comment else ""
-    rebuilt = [indent + body + suffix + "\n" for body in bodies[:-1]]
-    rebuilt.append(indent + bodies[-1] + suffix + trailing_nl)
+    rebuilt = [indent + body + _safe_suffix(body, suffix) + "\n" for body in bodies[:-1]]
+    rebuilt.append(indent + bodies[-1] + _safe_suffix(bodies[-1], suffix) + trailing_nl)
     applied = sum(len(aliases) for aliases in groups.values())
     return rebuilt, applied
 
@@ -235,6 +235,13 @@ def _format_remaining(
 def _alias_has_suppress(alias: ast.alias, lines: list[str]) -> bool:
     """Check whether the source line of *alias* contains ``# minport: ignore``."""
     return _SUPPRESS_RE.search(lines[alias.lineno - 1]) is not None
+
+
+def _safe_suffix(body: str, suffix: str) -> str:
+    """Return *suffix* unless *body* already contains an inline comment."""
+    if not suffix or "#" in body:
+        return ""
+    return suffix
 
 
 def _format_from(module: str, aliases: list[ast.alias]) -> str:

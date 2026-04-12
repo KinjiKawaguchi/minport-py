@@ -805,6 +805,36 @@ class TestFixer:
         assert content == "from x.y import Name\n"
         assert "# section header" not in content
 
+    def test_fix_no_doubled_comment_with_suppress(self, tmp_path: Path) -> None:
+        """Comment is not doubled when _format_remaining already adds # minport: ignore."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from x.y.z import (  # noqa\n    A,\n    B,  # minport: ignore\n)\n",
+        )
+
+        violations = [
+            Violation(
+                file_path=test_file,
+                line=1,
+                col=1,
+                original_path="x.y.z",
+                shorter_path="x",
+                name="A",
+                alias=None,
+                code="MP001",
+                message="test",
+            ),
+        ]
+
+        applied = fix_file(test_file, violations)
+        assert applied == 1
+        content = test_file.read_text()
+        # A's line gets the noqa comment
+        assert "from x import A  # noqa" in content
+        # B's line keeps its suppress directive, no doubled comment
+        assert "from x.y.z import B  # minport: ignore" in content
+        assert "# minport: ignore  # noqa" not in content
+
     def test_fix_with_import_not_matching_pattern(self, tmp_path: Path) -> None:
         """Test: When import pattern doesn't match, line is left unchanged."""
         test_file = tmp_path / "test.py"
