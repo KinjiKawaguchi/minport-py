@@ -381,14 +381,16 @@ class TestCLI:
         skipped = tmp_path / "skipped.py"
         skipped.write_text("from pkg.sub.module import Name")
 
-        exit_code = main([
-            "check",
-            str(tmp_path),
-            "--extend-exclude",
-            "skipped.py",
-            "--src",
-            str(tmp_path),
-        ])
+        exit_code = main(
+            [
+                "check",
+                str(tmp_path),
+                "--extend-exclude",
+                "skipped.py",
+                "--src",
+                str(tmp_path),
+            ]
+        )
         assert exit_code == 1
 
     def test_extend_exclude_from_pyproject(
@@ -410,18 +412,18 @@ class TestCLI:
         skipped.write_text("from pkg.sub.module import Name")
 
         config_file = tmp_path / "pyproject.toml"
-        config_file.write_text(
-            '[tool.minport]\nextend-exclude = ["gen_file.py"]\n'
-        )
+        config_file.write_text('[tool.minport]\nextend-exclude = ["gen_file.py"]\n')
 
-        exit_code = main([
-            "check",
-            str(tmp_path),
-            "--config",
-            str(config_file),
-            "--src",
-            str(tmp_path),
-        ])
+        exit_code = main(
+            [
+                "check",
+                str(tmp_path),
+                "--config",
+                str(config_file),
+                "--src",
+                str(tmp_path),
+            ]
+        )
         captured = capsys.readouterr()
 
         assert exit_code == 1
@@ -444,16 +446,18 @@ class TestCLI:
         (tmp_path / "b.py").write_text("from pkg.sub.module import Name")
         (tmp_path / "c.py").write_text("from pkg.sub.module import Name")
 
-        exit_code = main([
-            "check",
-            str(tmp_path),
-            "--exclude",
-            "a.py",
-            "--extend-exclude",
-            "b.py",
-            "--src",
-            str(tmp_path),
-        ])
+        exit_code = main(
+            [
+                "check",
+                str(tmp_path),
+                "--exclude",
+                "a.py",
+                "--extend-exclude",
+                "b.py",
+                "--src",
+                str(tmp_path),
+            ]
+        )
         captured = capsys.readouterr()
 
         assert exit_code == 1
