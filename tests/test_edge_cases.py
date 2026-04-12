@@ -972,15 +972,18 @@ class TestPerNameSuppress:
         assert fix_result.fixes_applied == 0
         assert test_file.read_text() == original
 
-    def test_fix_preserves_user_comment_in_import(self, tmp_path: Path) -> None:
-        """--fix still skips imports with non-suppress comments."""
+    def test_fix_rewrites_import_with_user_comment(self, tmp_path: Path) -> None:
+        """--fix rewrites imports and preserves inline comments."""
         self._make_pkg(tmp_path)
         test_file = tmp_path / "test.py"
-        original = "from pkg.sub.module import (\n    Foo,  # important note\n    Bar,\n)\n"
-        test_file.write_text(original)
+        test_file.write_text(
+            "from pkg.sub.module import (\n    Foo,  # important note\n    Bar,\n)\n",
+        )
 
         result, fix_result = check([test_file], src_roots=[tmp_path], fix=True)
         assert len(result.violations) == 2
         assert fix_result is not None
-        assert fix_result.fixes_applied == 0
-        assert test_file.read_text() == original
+        assert fix_result.fixes_applied == 2
+        content = test_file.read_text()
+        assert "from pkg import" in content
+        assert "# important note" in content
