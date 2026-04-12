@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/KinjiKawaguchi/minport-py/compare/v0.1.0...v0.1.1) (2026-04-12)
+
+
+### Bug Fixes
+
+* preserve inline comments when rewriting imports ([#30](https://github.com/KinjiKawaguchi/minport-py/issues/30)) ([4a8931f](https://github.com/KinjiKawaguchi/minport-py/commit/4a8931fd8a5c16ef6932664d9eb39c034a351f22))
+
 ## 0.1.0 (2026-04-12)
 
 
