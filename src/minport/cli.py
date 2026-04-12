@@ -58,7 +58,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--exclude",
         action="append",
         default=None,
-        help="Glob patterns to exclude",
+        help="Glob patterns to exclude (overrides defaults)",
+    )
+    check_parser.add_argument(
+        "--extend-exclude",
+        action="append",
+        default=None,
+        help="Glob patterns to add to the exclude list",
     )
     check_parser.add_argument(
         "--config",
@@ -86,6 +92,8 @@ def _handle_check(args: argparse.Namespace) -> int:
 
     src_roots: list[Path] | None = args.src_roots or None
     exclude = args.exclude or _config_str_list(config, "exclude", [])
+    extend_exclude = args.extend_exclude or _config_str_list(config, "extend-exclude", [])
+    exclude = [*exclude, *extend_exclude]
 
     for p in paths:
         if not p.exists():
