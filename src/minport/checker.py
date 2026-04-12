@@ -41,34 +41,10 @@ def check(
             parsed[file_path] = pf
 
     all_violations: list[Violation] = []
-
     for file_path, pf in parsed.items():
-        imports = parse_imports(pf.tree, file_path)
-        for imp in imports:
-            if _has_suppress_comment(imp.line, pf.source_lines):
-                continue
-            shorter = resolver.find_shortest_path(imp.module_path, imp.name)
-            if shorter is None:
-                continue
-            if resolver.has_name_conflict(imp.name, imp.module_path):
-                continue
-            all_violations.append(
-                Violation(
-                    file_path=file_path,
-                    line=imp.line,
-                    col=imp.col,
-                    original_path=imp.module_path,
-                    shorter_path=shorter,
-                    name=imp.name,
-                    alias=imp.alias,
-                    code="MP001",
-                    message=(
-                        f"`from {imp.module_path} import {imp.name}` can be shortened"
-                        f" to `from {shorter} import {imp.name}`"
-                    ),
-                ),
-            )
-
+        all_violations.extend(
+            _find_violations(file_path, pf, resolver, effective_src),
+        )
     all_violations.sort(key=lambda v: (str(v.file_path), v.line, v.col))
 
     files_violations: dict[Path, list[Violation]] = {}
@@ -87,6 +63,43 @@ def check(
     if not fix:
         return result, None
     return result, fix_files(fixable)
+
+
+def _find_violations(
+    file_path: Path,
+    pf: ParsedFile,
+    resolver: ReexportResolver,
+    src_roots: list[Path],
+) -> list[Violation]:
+    """Detect shortenable imports in a single parsed file."""
+    violations: list[Violation] = []
+    for imp in parse_imports(pf.tree, file_path):
+        if _has_suppress_comment(imp.line, pf.source_lines):
+            continue
+        shorter = resolver.find_shortest_path(imp.module_path, imp.name)
+        if shorter is None:
+            continue
+        if resolver.has_name_conflict(imp.name, imp.module_path):
+            continue
+        if _is_own_init(file_path, shorter, src_roots):
+            continue
+        violations.append(
+            Violation(
+                file_path=file_path,
+                line=imp.line,
+                col=imp.col,
+                original_path=imp.module_path,
+                shorter_path=shorter,
+                name=imp.name,
+                alias=imp.alias,
+                code="MP001",
+                message=(
+                    f"`from {imp.module_path} import {imp.name}` can be shortened"
+                    f" to `from {shorter} import {imp.name}`"
+                ),
+            ),
+        )
+    return violations
 
 
 def _infer_src_roots(paths: Sequence[Path]) -> list[Path]:
@@ -219,6 +232,29 @@ def _collect_all_from_imports(tree: ast.Module) -> dict[tuple[str, str], int]:
         for alias in node.names:
             imports.setdefault((module, alias.name), node.lineno)
     return imports
+
+
+def _is_own_init(
+    file_path: Path,
+    shorter_module: str,
+    src_roots: list[Path],
+) -> bool:
+    """Return True when *file_path* is the ``__init__.py`` of *shorter_module*.
+
+    Shortening an import to a package whose ``__init__.py`` is the file being
+    checked would create a self-import (partially initialized module error).
+    """
+    if file_path.name != "__init__.py":
+        return False
+    parts = shorter_module.split(".")
+    for root in src_roots:
+        candidate = root / Path(*parts) / "__init__.py"
+        try:
+            if file_path.resolve() == candidate.resolve():
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def _has_suppress_comment(lineno: int, source_lines: tuple[str, ...]) -> bool:
