@@ -239,22 +239,41 @@ def _is_own_init(
     shorter_module: str,
     src_roots: list[Path],
 ) -> bool:
-    """Return True when *file_path* is the ``__init__.py`` of *shorter_module*.
+    """Return True when shortening would cause a circular import.
 
-    Shortening an import to a package whose ``__init__.py`` is the file being
-    checked would create a self-import (partially initialized module error).
+    Two cases are blocked:
+    1. *file_path* is the ``__init__.py`` of *shorter_module* itself (direct
+       self-import → partially initialized module).
+    2. *file_path* is an ``__init__.py`` inside a descendant package of
+       *shorter_module*. The ancestor's ``__init__.py`` may re-export from
+       this package, creating an indirect circular import chain.
     """
     if file_path.name != "__init__.py":
         return False
-    parts = shorter_module.split(".")
+    pkg_module = _init_to_module(file_path, src_roots)
+    if pkg_module is None:
+        return False
+    return pkg_module == shorter_module or pkg_module.startswith(f"{shorter_module}.")
+
+
+def _init_to_module(file_path: Path, src_roots: list[Path]) -> str | None:
+    """Map an ``__init__.py`` path to its dotted module name."""
+    try:
+        resolved = file_path.resolve()
+    except OSError:
+        return None
+    pkg_dir = resolved.parent
     for root in src_roots:
-        candidate = root / Path(*parts) / "__init__.py"
         try:
-            if file_path.resolve() == candidate.resolve():
-                return True
+            root_resolved = root.resolve()
         except OSError:
             continue
-    return False
+        try:
+            rel = pkg_dir.relative_to(root_resolved)
+        except ValueError:
+            continue
+        return ".".join(rel.parts)
+    return None
 
 
 def _has_suppress_comment(lineno: int, source_lines: tuple[str, ...]) -> bool:
