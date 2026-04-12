@@ -379,7 +379,9 @@ if TYPE_CHECKING:
         assert _is_own_init(f, "pkg", [tmp_path]) is False
 
     def test_init_to_module_file_resolve_oserror(
-        self, tmp_path: Path, monkeypatch,
+        self,
+        tmp_path: Path,
+        monkeypatch,
     ) -> None:
         """_init_to_module returns None when file_path.resolve() raises OSError."""
         init = tmp_path / "pkg" / "__init__.py"
@@ -399,7 +401,9 @@ if TYPE_CHECKING:
         assert _is_own_init(init, "pkg", [tmp_path]) is False
 
     def test_init_to_module_root_resolve_oserror(
-        self, tmp_path: Path, monkeypatch,
+        self,
+        tmp_path: Path,
+        monkeypatch,
     ) -> None:
         """_init_to_module skips roots whose resolve() raises OSError."""
         init = tmp_path / "pkg" / "__init__.py"
