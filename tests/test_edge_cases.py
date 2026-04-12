@@ -935,3 +935,52 @@ class TestPerNameSuppress:
         assert foo.name_line == 2
         assert bar.line == 1
         assert bar.name_line == 3
+
+    def test_fix_with_per_name_suppress(self, tmp_path: Path) -> None:
+        """--fix rewrites unsuppressed names even when siblings have # minport: ignore."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from pkg.sub.module import (\n    Foo,  # minport: ignore\n    Bar,\n)\n"
+        )
+
+        result, fix_result = check([test_file], src_roots=[tmp_path], fix=True)
+        assert len(result.violations) == 1
+        assert result.violations[0].name == "Bar"
+        assert fix_result is not None
+        assert fix_result.fixes_applied == 1
+
+        content = test_file.read_text()
+        assert "from pkg import Bar" in content
+        assert "from pkg.sub.module import Foo  # minport: ignore" in content
+
+    def test_fix_multiline_all_suppressed_no_change(self, tmp_path: Path) -> None:
+        """--fix does nothing when all names are suppressed."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        original = (
+            "from pkg.sub.module import (\n"
+            "    Foo,  # minport: ignore\n"
+            "    Bar,  # minport: ignore\n"
+            ")\n"
+        )
+        test_file.write_text(original)
+
+        result, fix_result = check([test_file], src_roots=[tmp_path], fix=True)
+        assert len(result.violations) == 0
+        assert fix_result is not None
+        assert fix_result.fixes_applied == 0
+        assert test_file.read_text() == original
+
+    def test_fix_preserves_user_comment_in_import(self, tmp_path: Path) -> None:
+        """--fix still skips imports with non-suppress comments."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        original = "from pkg.sub.module import (\n    Foo,  # important note\n    Bar,\n)\n"
+        test_file.write_text(original)
+
+        result, fix_result = check([test_file], src_roots=[tmp_path], fix=True)
+        assert len(result.violations) == 2
+        assert fix_result is not None
+        assert fix_result.fixes_applied == 0
+        assert test_file.read_text() == original
