@@ -805,6 +805,63 @@ class TestFixer:
         assert content == "from x.y import Name\n"
         assert "# section header" not in content
 
+    def test_fix_strips_suppress_from_combined_comment(self, tmp_path: Path) -> None:
+        """Combined comment like '# noqa: F401 # minport: ignore' strips suppress part."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from x.y.z import (\n    A,\n    B,  # noqa: F401 # minport: ignore\n)\n",
+        )
+
+        violations = [
+            Violation(
+                file_path=test_file,
+                line=1,
+                col=1,
+                original_path="x.y.z",
+                shorter_path="x",
+                name="A",
+                alias=None,
+                code="MP001",
+                message="test",
+            ),
+        ]
+
+        applied = fix_file(test_file, violations)
+        assert applied == 1
+        content = test_file.read_text()
+        # A gets the noqa part only, without minport: ignore
+        assert "from x import A  # noqa: F401" in content
+        assert "minport: ignore" not in content.split("\n")[0]
+        # B keeps its suppress directive
+        assert "from x.y.z import B  # minport: ignore" in content
+
+    def test_fix_strips_suppress_prefix_from_combined_comment(self, tmp_path: Path) -> None:
+        """'# minport: ignore # noqa' strips suppress and keeps noqa."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from x.y.z import A  # minport: ignore # noqa: E402\n",
+        )
+
+        # minport: ignore is on the whole line, so checker would skip this.
+        # But if somehow a violation is generated, the fixer should handle it.
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=1,
+            original_path="x.y.z",
+            shorter_path="x",
+            name="A",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        applied = fix_file(test_file, [violation])
+        assert applied == 1
+        content = test_file.read_text()
+        assert "from x import A  # noqa: E402" in content
+        assert "minport: ignore" not in content
+
     def test_fix_no_doubled_comment_with_suppress(self, tmp_path: Path) -> None:
         """Comment is not doubled when _format_remaining already adds # minport: ignore."""
         test_file = tmp_path / "test.py"

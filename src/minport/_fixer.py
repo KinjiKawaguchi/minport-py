@@ -261,8 +261,9 @@ def _extract_trailing_comment(span_lines: list[str]) -> str:
     Scans the span lines for ``#`` and returns the first comment found
     (stripped of trailing whitespace/newline), or an empty string if none.
     Since import statements cannot contain string literals, any ``#`` in
-    the span is a comment marker. ``# minport: ignore`` directives are
-    excluded since they are handled separately by ``_format_remaining``.
+    the span is a comment marker. Any ``# minport: ignore`` directive
+    embedded in the comment is stripped out since it is handled separately
+    by ``_format_remaining``.
     """
     for line in span_lines:
         stripped = line.rstrip("\n\r")
@@ -271,8 +272,8 @@ def _extract_trailing_comment(span_lines: list[str]) -> str:
             continue
         if not stripped[:idx].strip():
             continue
-        comment = stripped[idx:].rstrip()
-        if _SUPPRESS_RE.match(comment):
+        comment = _SUPPRESS_RE.sub("", stripped[idx:]).strip()
+        if not comment:
             continue
         return comment
     return ""
