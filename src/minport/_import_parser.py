@@ -37,6 +37,7 @@ def parse_imports(tree: ast.Module, file_path: Path) -> list[ImportStatement]:
                 file_path=file_path,
                 line=node.lineno,
                 col=node.col_offset + 1,
+                name_line=alias.lineno,
             )
             for alias in node.names
         )

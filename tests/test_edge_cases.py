@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
 
-from minport._models import DEFAULT_EXCLUDES
+from minport._import_parser import parse_imports
+from minport._models import DEFAULT_EXCLUDES, ImportStatement
 from minport._reexport_resolver import ReexportResolver
 from minport.checker import (
     _has_suppress_comment,
     _init_to_module,
     _is_excluded,
     _is_own_init,
+    _is_suppressed,
     check,
 )
 from minport.cli import main
@@ -822,3 +825,162 @@ class TestDefaultExcludes:
         exit_code = main(["check", str(tmp_path), "--config", str(config), "--src", str(tmp_path)])
         # .venv/mod.py is now included (defaults overridden), no violations
         assert exit_code == 0
+
+
+class TestPerNameSuppress:
+    """Tests for per-name # minport: ignore in multi-line imports (Issue #24)."""
+
+    def _make_pkg(self, tmp_path: Path) -> None:
+        """Create a package with re-exports for Foo and Bar."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+        (pkg / "__init__.py").write_text("from .sub.module import Foo, Bar")
+        (sub / "__init__.py").write_text("from .module import Foo, Bar")
+        (sub / "module.py").write_text("Foo = 1\nBar = 2")
+
+    def test_multiline_suppress_single_name(self, tmp_path: Path) -> None:
+        """Suppress comment on individual name line suppresses only that name."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from pkg.sub.module import (\n    Foo,  # minport: ignore\n    Bar,\n)\n"
+        )
+
+        result, _ = check([test_file], src_roots=[tmp_path])
+        names = [v.name for v in result.violations]
+        assert "Foo" not in names
+        assert "Bar" in names
+
+    def test_multiline_suppress_from_line_suppresses_all(self, tmp_path: Path) -> None:
+        """Suppress comment on from line suppresses all names."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from pkg.sub.module import (  # minport: ignore\n    Foo,\n    Bar,\n)\n"
+        )
+
+        result, _ = check([test_file], src_roots=[tmp_path])
+        assert len(result.violations) == 0
+
+    def test_multiline_suppress_multiple_names(self, tmp_path: Path) -> None:
+        """Suppress comments on multiple name lines suppress each independently."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from pkg.sub.module import (\n"
+            "    Foo,  # minport: ignore\n"
+            "    Bar,  # minport: ignore\n"
+            ")\n"
+        )
+
+        result, _ = check([test_file], src_roots=[tmp_path])
+        assert len(result.violations) == 0
+
+    def test_single_line_import_suppress_unchanged(self, tmp_path: Path) -> None:
+        """Single-line import with suppress still works (backward compat)."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from pkg.sub.module import Foo  # minport: ignore\nfrom pkg.sub.module import Bar\n"
+        )
+
+        result, _ = check([test_file], src_roots=[tmp_path])
+        names = [v.name for v in result.violations]
+        assert "Foo" not in names
+        assert "Bar" in names
+
+    def test_is_suppressed_name_line_differs_from_from_line(self) -> None:
+        """_is_suppressed checks name_line when it differs from from line."""
+        imp = ImportStatement(
+            module_path="pkg.sub",
+            name="Foo",
+            alias=None,
+            file_path=Path("test.py"),
+            line=1,
+            col=1,
+            name_line=2,
+        )
+        source_lines = (
+            "from pkg.sub import (",
+            "    Foo,  # minport: ignore",
+            ")",
+        )
+        assert _is_suppressed(imp, source_lines) is True
+
+    def test_is_suppressed_same_line_no_comment(self) -> None:
+        """_is_suppressed returns False when no comment on either line."""
+        imp = ImportStatement(
+            module_path="pkg.sub",
+            name="Foo",
+            alias=None,
+            file_path=Path("test.py"),
+            line=1,
+            col=1,
+            name_line=1,
+        )
+        source_lines = ("from pkg.sub import Foo",)
+        assert _is_suppressed(imp, source_lines) is False
+
+    def test_name_line_in_import_parser(self, tmp_path: Path) -> None:
+        """parse_imports sets name_line from ast.alias.lineno."""
+        source = "from pkg.sub import (\n    Foo,\n    Bar,\n)\n"
+        tree = ast.parse(source)
+        imports = parse_imports(tree, tmp_path / "test.py")
+        assert len(imports) == 2
+        foo = next(i for i in imports if i.name == "Foo")
+        bar = next(i for i in imports if i.name == "Bar")
+        assert foo.line == 1
+        assert foo.name_line == 2
+        assert bar.line == 1
+        assert bar.name_line == 3
+
+    def test_fix_with_per_name_suppress(self, tmp_path: Path) -> None:
+        """--fix rewrites unsuppressed names even when siblings have # minport: ignore."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        test_file.write_text(
+            "from pkg.sub.module import (\n    Foo,  # minport: ignore\n    Bar,\n)\n"
+        )
+
+        result, fix_result = check([test_file], src_roots=[tmp_path], fix=True)
+        assert len(result.violations) == 1
+        assert result.violations[0].name == "Bar"
+        assert fix_result is not None
+        assert fix_result.fixes_applied == 1
+
+        content = test_file.read_text()
+        assert "from pkg import Bar" in content
+        assert "from pkg.sub.module import Foo  # minport: ignore" in content
+
+    def test_fix_multiline_all_suppressed_no_change(self, tmp_path: Path) -> None:
+        """--fix does nothing when all names are suppressed."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        original = (
+            "from pkg.sub.module import (\n"
+            "    Foo,  # minport: ignore\n"
+            "    Bar,  # minport: ignore\n"
+            ")\n"
+        )
+        test_file.write_text(original)
+
+        result, fix_result = check([test_file], src_roots=[tmp_path], fix=True)
+        assert len(result.violations) == 0
+        assert fix_result is not None
+        assert fix_result.fixes_applied == 0
+        assert test_file.read_text() == original
+
+    def test_fix_preserves_user_comment_in_import(self, tmp_path: Path) -> None:
+        """--fix still skips imports with non-suppress comments."""
+        self._make_pkg(tmp_path)
+        test_file = tmp_path / "test.py"
+        original = "from pkg.sub.module import (\n    Foo,  # important note\n    Bar,\n)\n"
+        test_file.write_text(original)
+
+        result, fix_result = check([test_file], src_roots=[tmp_path], fix=True)
+        assert len(result.violations) == 2
+        assert fix_result is not None
+        assert fix_result.fixes_applied == 0
+        assert test_file.read_text() == original

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from typing import TYPE_CHECKING
 
 from minport._models import FixResult
@@ -143,7 +144,7 @@ def _rebuild_import(
 
     bodies: list[str] = [_format_from(shorter, groups[shorter]) for shorter in sorted(groups)]
     if remaining:
-        bodies.append(_format_from(node.module, remaining))
+        bodies.extend(_format_remaining(node.module, remaining, lines))
 
     rebuilt = [indent + body + "\n" for body in bodies[:-1]]
     rebuilt.append(indent + bodies[-1] + trailing_nl)
@@ -199,7 +200,42 @@ def _is_safe_to_rebuild(
         return False
     if end_line[end_col:].strip():
         return False
-    return "#" not in span_source
+    stripped = _SUPPRESS_RE.sub("", span_source)
+    return "#" not in stripped
+
+
+_SUPPRESS_RE = re.compile(r"#\s*minport:\s*ignore\b")
+
+
+def _format_remaining(
+    module: str,
+    aliases: list[ast.alias],
+    lines: list[str],
+) -> list[str]:
+    """Format remaining (unmoved) aliases, preserving ``# minport: ignore``.
+
+    Aliases whose original source line contained ``# minport: ignore`` are
+    grouped separately so the directive is restored on the rebuilt line.
+    """
+    suppressed: list[ast.alias] = []
+    normal: list[ast.alias] = []
+    for alias in aliases:
+        if _alias_has_suppress(alias, lines):
+            suppressed.append(alias)
+        else:
+            normal.append(alias)
+
+    result: list[str] = []
+    if normal:
+        result.append(_format_from(module, normal))
+    if suppressed:
+        result.append(f"{_format_from(module, suppressed)}  # minport: ignore")
+    return result
+
+
+def _alias_has_suppress(alias: ast.alias, lines: list[str]) -> bool:
+    """Check whether the source line of *alias* contains ``# minport: ignore``."""
+    return _SUPPRESS_RE.search(lines[alias.lineno - 1]) is not None
 
 
 def _format_from(module: str, aliases: list[ast.alias]) -> str:
