@@ -251,13 +251,13 @@ def _format_alias(alias: ast.alias) -> str:
 
 
 def _extract_trailing_comment(span_lines: list[str]) -> str:
-    """Extract inline comments from the import span.
+    """Extract the first inline comment from the import span.
 
-    Scans the span lines for ``#`` comments that are not inside string
-    literals. Returns the first comment found (stripped of trailing
-    whitespace/newline), or an empty string if none. ``# minport: ignore``
-    directives are excluded since they are handled separately by
-    ``_format_remaining``.
+    Scans the span lines for ``#`` and returns the first comment found
+    (stripped of trailing whitespace/newline), or an empty string if none.
+    Since import statements cannot contain string literals, any ``#`` in
+    the span is a comment marker. ``# minport: ignore`` directives are
+    excluded since they are handled separately by ``_format_remaining``.
     """
     for line in span_lines:
         stripped = line.rstrip("\n\r")
