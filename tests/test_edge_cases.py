@@ -8,7 +8,7 @@ import pytest
 
 from minport._models import DEFAULT_EXCLUDES
 from minport._reexport_resolver import ReexportResolver
-from minport.checker import _has_suppress_comment, _is_excluded, check
+from minport.checker import _has_suppress_comment, _is_excluded, _is_own_init, check
 from minport.cli import main
 
 
@@ -366,6 +366,30 @@ if TYPE_CHECKING:
         exit_code = main(["check"])
         assert exit_code == 0
 
+    def test_is_own_init_non_init_file(self, tmp_path: Path) -> None:
+        """_is_own_init returns False for non-__init__.py files."""
+        f = tmp_path / "module.py"
+        f.write_text("")
+        assert _is_own_init(f, "pkg", [tmp_path]) is False
+
+    def test_is_own_init_resolve_oserror(self, tmp_path: Path, monkeypatch) -> None:
+        """_is_own_init handles OSError during path resolution gracefully."""
+        init = tmp_path / "pkg" / "__init__.py"
+        init.parent.mkdir()
+        init.write_text("")
+
+        original_resolve = Path.resolve
+
+        msg = "simulated"
+
+        def broken_resolve(self, *, strict=False):
+            if self.name == "__init__.py" and "pkg" in str(self):
+                raise OSError(msg)
+            return original_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", broken_resolve)
+        assert _is_own_init(init, "pkg", [tmp_path]) is False
+
     def test_is_excluded_path_not_relative(self) -> None:
         """_is_excluded handles path not relative to base."""
         result = _is_excluded(Path("/elsewhere/file.py"), Path("/some/base"), ["*.py"])
@@ -514,6 +538,58 @@ if TYPE_CHECKING:
         result, _ = check([test_file], src_roots=[tmp_path])
         assert len(result.violations) == 1
         assert result.fixable_count == 0
+
+    def test_init_self_import_not_reported(self, tmp_path: Path) -> None:
+        """Issue #18: __init__.py must not suggest shortening to its own package.
+
+        ``pkg/__init__.py`` containing ``from pkg.sub import Hello`` should NOT
+        be reported as shortenable to ``from pkg import Hello``, because the
+        file itself *is* ``pkg/__init__.py`` — applying the fix would create a
+        self-import and raise ``ImportError`` (partially initialized module).
+        """
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            'from pkg.sub import Hello\n__all__ = ["Hello"]\n',
+        )
+        (pkg / "sub.py").write_text("class Hello: ...\n")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        hello_violations = [v for v in result.violations if v.name == "Hello"]
+        assert hello_violations == [], (
+            f"__init__.py must not suggest self-import, got: {hello_violations}"
+        )
+
+    def test_init_self_import_fix_no_change(self, tmp_path: Path) -> None:
+        """Issue #18: --fix must not rewrite __init__.py to self-import."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        original = 'from pkg.sub import Hello\n__all__ = ["Hello"]\n'
+        (pkg / "__init__.py").write_text(original)
+        (pkg / "sub.py").write_text("class Hello: ...\n")
+
+        check([tmp_path], src_roots=[tmp_path], fix=True)
+
+        assert (pkg / "__init__.py").read_text() == original
+
+    def test_deep_init_self_import_not_reported(self, tmp_path: Path) -> None:
+        """Issue #18: Deep nesting — a/b/c/__init__.py must not shorten to a.b.c."""
+        a = tmp_path / "a"
+        b = a / "b"
+        c = b / "c"
+        c.mkdir(parents=True)
+        (a / "__init__.py").write_text("")
+        (b / "__init__.py").write_text("")
+        (c / "__init__.py").write_text("from a.b.c.d import Name\n")
+        (c / "d.py").write_text("Name = 1\n")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        name_violations = [v for v in result.violations if v.name == "Name"]
+        # a.b.c/__init__.py → should not suggest "from a.b.c import Name"
+        for v in name_violations:
+            assert v.shorter_path != "a.b.c", (
+                f"__init__.py must not suggest shortening to its own package: {v}"
+            )
 
     def test_cli_no_paths_no_config(self, monkeypatch, tmp_path: Path) -> None:
         """CLI with no paths and no config src falls back to Path()."""
