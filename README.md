@@ -199,4 +199,4 @@ uv run ruff check src/ tests/
 
 ## License
 
-MIT
+[MIT](LICENSE)
