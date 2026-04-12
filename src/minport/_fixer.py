@@ -145,11 +145,9 @@ def _rebuild_import(
     if remaining:
         bodies.extend(_format_remaining(node.module, remaining, lines))
 
-    rebuilt = [indent + body + "\n" for body in bodies[:-1]]
-    last = indent + bodies[-1]
-    if comment:
-        last += "  " + comment
-    rebuilt.append(last + trailing_nl)
+    suffix = f"  {comment}" if comment else ""
+    rebuilt = [indent + body + suffix + "\n" for body in bodies[:-1]]
+    rebuilt.append(indent + bodies[-1] + suffix + trailing_nl)
     applied = sum(len(aliases) for aliases in groups.values())
     return rebuilt, applied
 
@@ -262,11 +260,14 @@ def _extract_trailing_comment(span_lines: list[str]) -> str:
     for line in span_lines:
         stripped = line.rstrip("\n\r")
         idx = stripped.find("#")
-        if idx >= 0:
-            comment = stripped[idx:].rstrip()
-            if _SUPPRESS_RE.match(comment):
-                continue
-            return comment
+        if idx < 0:
+            continue
+        if not stripped[:idx].strip():
+            continue
+        comment = stripped[idx:].rstrip()
+        if _SUPPRESS_RE.match(comment):
+            continue
+        return comment
     return ""
 
 

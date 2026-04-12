@@ -744,6 +744,67 @@ class TestFixer:
         assert "from x.y import Name" in content
         assert "# noqa: E402" in content
 
+    def test_fix_comment_on_all_split_lines(self, tmp_path: Path) -> None:
+        """When names split to different shorter paths, comment goes on all lines."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("from x.y.z import A, B  # noqa: E402\n")
+
+        violations = [
+            Violation(
+                file_path=test_file,
+                line=1,
+                col=1,
+                original_path="x.y.z",
+                shorter_path="x",
+                name="A",
+                alias=None,
+                code="MP001",
+                message="test",
+            ),
+            Violation(
+                file_path=test_file,
+                line=1,
+                col=1,
+                original_path="x.y.z",
+                shorter_path="x.y",
+                name="B",
+                alias=None,
+                code="MP001",
+                message="test",
+            ),
+        ]
+
+        applied = fix_file(test_file, violations)
+        assert applied == 2
+        content = test_file.read_text()
+        lines = content.splitlines()
+        assert len(lines) == 2
+        assert lines[0] == "from x import A  # noqa: E402"
+        assert lines[1] == "from x.y import B  # noqa: E402"
+
+    def test_fix_standalone_comment_not_inlined(self, tmp_path: Path) -> None:
+        """Standalone comment lines in multi-line import are not converted to inline."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("from x.y.z import (\n    # section header\n    Name,\n)\n")
+
+        violation = Violation(
+            file_path=test_file,
+            line=1,
+            col=1,
+            original_path="x.y.z",
+            shorter_path="x.y",
+            name="Name",
+            alias=None,
+            code="MP001",
+            message="test",
+        )
+
+        applied = fix_file(test_file, [violation])
+        assert applied == 1
+        content = test_file.read_text()
+        assert content == "from x.y import Name\n"
+        assert "# section header" not in content
+
     def test_fix_with_import_not_matching_pattern(self, tmp_path: Path) -> None:
         """Test: When import pattern doesn't match, line is left unchanged."""
         test_file = tmp_path / "test.py"
