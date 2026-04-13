@@ -58,7 +58,7 @@ def check(
     all_violations: list[Violation] = []
     for file_path, pf in parsed.items():
         all_violations.extend(
-            _find_violations(file_path, pf, resolver, effective_src),
+            _find_violations(file_path, pf, resolver),
         )
     all_violations.sort(key=lambda v: (str(v.file_path), v.line, v.col))
 
@@ -84,7 +84,6 @@ def _find_violations(
     file_path: Path,
     pf: ParsedFile,
     resolver: ReexportResolver,
-    src_roots: list[Path],
 ) -> list[Violation]:
     """Detect shortenable imports in a single parsed file."""
     violations: list[Violation] = []
@@ -96,7 +95,7 @@ def _find_violations(
             continue
         if resolver.has_name_conflict(imp.name, imp.module_path):
             continue
-        if _is_own_init(file_path, shorter, src_roots):
+        if _would_cause_cycle(file_path, shorter, resolver):
             continue
         violations.append(
             Violation(
@@ -251,53 +250,27 @@ def _collect_all_from_imports(tree: ast.Module) -> dict[tuple[str, str], int]:
     return imports
 
 
-def _is_own_init(
+def _would_cause_cycle(
     file_path: Path,
     shorter_module: str,
-    src_roots: list[Path],
+    resolver: ReexportResolver,
 ) -> bool:
     """Return True when shortening would cause a circular import.
 
-    Two cases are blocked:
-    1. *file_path* is the ``__init__.py`` of *shorter_module* itself (direct
-       self-import → partially initialized module).
-    2. *file_path* is an ``__init__.py`` inside a descendant package of
-       *shorter_module*. The ancestor's ``__init__.py`` may re-export from
-       this package, creating an indirect circular import chain.
+    A cycle is possible when loading *shorter_module* (i.e. running its
+    ``__init__.py``) would transitively load *file_path*. In that case,
+    ``from shorter_module import Name`` inside *file_path* would read from
+    a partially-initialized namespace.
+
+    Covers three patterns:
+
+    1. *file_path* is the ``__init__.py`` of *shorter_module* itself.
+    2. *file_path* is the ``__init__.py`` of a descendant package whose
+       ancestor ``__init__.py`` re-exports from it.
+    3. *file_path* is a regular module loaded by *shorter_module*'s
+       ``__init__.py`` (directly or transitively).
     """
-    if file_path.name != "__init__.py":
-        return False
-    pkg_module = _init_to_module(file_path, src_roots)
-    if pkg_module is None:
-        return False
-    return pkg_module == shorter_module or pkg_module.startswith(f"{shorter_module}.")
-
-
-def _init_to_module(file_path: Path, src_roots: list[Path]) -> str | None:
-    """Map an ``__init__.py`` path to its dotted module name.
-
-    When multiple *src_roots* overlap (e.g. ``["/project", "/project/src"]``),
-    the most specific root (fewest relative parts) is chosen so that
-    ``/project/src/pkg/__init__.py`` resolves to ``pkg``, not ``src.pkg``.
-    """
-    try:
-        resolved = file_path.resolve()
-    except OSError:
-        return None
-    pkg_dir = resolved.parent
-    best: tuple[str, ...] | None = None
-    for root in src_roots:
-        try:
-            root_resolved = root.resolve()
-        except OSError:
-            continue
-        try:
-            rel = pkg_dir.relative_to(root_resolved)
-        except ValueError:
-            continue
-        if best is None or len(rel.parts) < len(best):
-            best = rel.parts
-    return ".".join(best) if best is not None else None
+    return resolver.loads_file(shorter_module, file_path)
 
 
 def _is_suppressed(

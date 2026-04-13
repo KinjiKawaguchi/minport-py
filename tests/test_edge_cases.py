@@ -12,9 +12,7 @@ from minport._models import DEFAULT_EXCLUDES, ImportStatement
 from minport._reexport_resolver import ReexportResolver
 from minport.checker import (
     _has_suppress_comment,
-    _init_to_module,
     _is_excluded,
-    _is_own_init,
     _is_suppressed,
     check,
 )
@@ -375,79 +373,6 @@ if TYPE_CHECKING:
         exit_code = main(["check"])
         assert exit_code == 0
 
-    def test_is_own_init_non_init_file(self, tmp_path: Path) -> None:
-        """_is_own_init returns False for non-__init__.py files."""
-        f = tmp_path / "module.py"
-        f.write_text("")
-        assert _is_own_init(f, "pkg", [tmp_path]) is False
-
-    def test_init_to_module_file_resolve_oserror(
-        self,
-        tmp_path: Path,
-        monkeypatch,
-    ) -> None:
-        """_init_to_module returns None when file_path.resolve() raises OSError."""
-        init = tmp_path / "pkg" / "__init__.py"
-        init.parent.mkdir()
-        init.write_text("")
-
-        original_resolve = Path.resolve
-        msg = "simulated"
-
-        def broken_resolve(self, *, strict=False):
-            if self == init:
-                raise OSError(msg)
-            return original_resolve(self, strict=strict)
-
-        monkeypatch.setattr(Path, "resolve", broken_resolve)
-        assert _init_to_module(init, [tmp_path]) is None
-        assert _is_own_init(init, "pkg", [tmp_path]) is False
-
-    def test_init_to_module_root_resolve_oserror(
-        self,
-        tmp_path: Path,
-        monkeypatch,
-    ) -> None:
-        """_init_to_module skips roots whose resolve() raises OSError."""
-        init = tmp_path / "pkg" / "__init__.py"
-        init.parent.mkdir()
-        init.write_text("")
-
-        original_resolve = Path.resolve
-        msg = "simulated"
-        bad_root = tmp_path / "bad"
-
-        def broken_resolve(self, *, strict=False):
-            if self == bad_root:
-                raise OSError(msg)
-            return original_resolve(self, strict=strict)
-
-        monkeypatch.setattr(Path, "resolve", broken_resolve)
-        assert _init_to_module(init, [bad_root, tmp_path]) == "pkg"
-
-    def test_init_to_module_overlapping_roots(self, tmp_path: Path) -> None:
-        """_init_to_module picks the most specific root with overlapping src_roots."""
-        src = tmp_path / "src"
-        pkg = src / "pkg"
-        pkg.mkdir(parents=True)
-        init = pkg / "__init__.py"
-        init.write_text("")
-
-        # Both tmp_path and src match, but src is more specific
-        assert _init_to_module(init, [tmp_path, src]) == "pkg"
-        # Order should not matter
-        assert _init_to_module(init, [src, tmp_path]) == "pkg"
-
-    def test_init_to_module_no_matching_root(self, tmp_path: Path) -> None:
-        """_init_to_module returns None when no src_root contains the file."""
-        init = tmp_path / "pkg" / "__init__.py"
-        init.parent.mkdir()
-        init.write_text("")
-
-        unrelated = tmp_path / "other"
-        unrelated.mkdir()
-        assert _init_to_module(init, [unrelated]) is None
-
     def test_is_excluded_path_not_relative(self) -> None:
         """_is_excluded handles path not relative to base."""
         result = _is_excluded(Path("/elsewhere/file.py"), Path("/some/base"), ["*.py"])
@@ -700,6 +625,146 @@ if TYPE_CHECKING:
         check([tmp_path], src_roots=[tmp_path], fix=True)
 
         assert (b / "__init__.py").read_text() == b_original
+
+    def test_non_init_module_imported_by_package_init_not_reported(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Issue #32: Non-__init__.py importing own ancestor via its __init__.
+
+        ``pkg/helpers.py`` with ``from pkg.core import Thing`` should NOT
+        suggest ``from pkg import Thing`` when ``pkg/__init__.py`` imports
+        ``.helpers``, because applying the fix creates a circular import:
+        ``pkg.__init__`` → ``pkg.helpers`` → ``from pkg import Thing``
+        (pkg still initializing).
+        """
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            "from .helpers import helper_fn\nfrom .core import Thing\n"
+            '__all__ = ["Thing", "helper_fn"]\n',
+        )
+        (pkg / "core.py").write_text("class Thing: ...\n")
+        (pkg / "helpers.py").write_text(
+            "from pkg.core import Thing\n\ndef helper_fn() -> Thing: ...\n",
+        )
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        helpers_violations = [v for v in result.violations if v.file_path.name == "helpers.py"]
+        assert helpers_violations == [], (
+            f"helpers.py must not suggest circular shortening, got: {helpers_violations}"
+        )
+
+    def test_loads_file_plain_import_statement(self, tmp_path: Path) -> None:
+        """Issue #32: `import a.b.c` triggers loading of file_path too."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("import pkg.helpers\nfrom .core import Thing\n")
+        (pkg / "core.py").write_text("class Thing: ...\n")
+        (pkg / "helpers.py").write_text("from pkg.core import Thing\n")
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        helpers_violations = [v for v in result.violations if v.file_path.name == "helpers.py"]
+        # helpers is loaded via `import pkg.helpers` in __init__ → shortening unsafe
+        assert helpers_violations == []
+
+    def test_loads_file_oserror_on_target(self, tmp_path: Path, monkeypatch) -> None:
+        """loads_file returns False when target.resolve() raises OSError."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        (pkg / "core.py").write_text("class Thing: ...\n")
+
+        resolver = ReexportResolver([tmp_path])
+        bad = tmp_path / "broken"
+        original_resolve = Path.resolve
+        msg = "simulated"
+
+        def broken_resolve(self, *, strict=False):
+            if self == bad:
+                raise OSError(msg)
+            return original_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", broken_resolve)
+        assert resolver.loads_file("pkg", bad) is False
+
+    def test_loads_file_skips_source_resolve_oserror(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        """_transitive_loads skips a source file whose resolve() raises OSError."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("from .core import Thing\n")
+        (pkg / "core.py").write_text("class Thing: ...\n")
+
+        resolver = ReexportResolver([tmp_path])
+        init_path = (pkg / "__init__.py").resolve()
+        original_resolve = Path.resolve
+        msg = "simulated"
+
+        def broken_resolve(self, *, strict=False):
+            if self == init_path:
+                raise OSError(msg)
+            return original_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", broken_resolve)
+        # Does not crash; simply skips the unresolvable file
+        loaded = resolver._transitive_loads("pkg")
+        assert isinstance(loaded, frozenset)
+
+    def test_loads_file_skips_syntax_error_file(self, tmp_path: Path) -> None:
+        """_transitive_loads skips files that fail to parse."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("from .broken import X\n")
+        (pkg / "broken.py").write_text("this is !! invalid python !!")
+
+        resolver = ReexportResolver([tmp_path])
+        loaded = resolver._transitive_loads("pkg")
+        # __init__ and broken.py are both loaded as files, but broken's AST fails
+        # The walk should not crash; at least __init__ is in loaded
+        assert (pkg / "__init__.py").resolve() in loaded
+
+    def test_loads_file_unresolvable_relative_import(self, tmp_path: Path) -> None:
+        """Relative imports beyond package depth are ignored."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        # `from .. import X` from pkg/__init__.py would exceed depth
+        (pkg / "__init__.py").write_text("from ... import Something\n")
+        (pkg / "core.py").write_text("class Thing: ...\n")
+
+        resolver = ReexportResolver([tmp_path])
+        # Should complete without raising, loading the invalid ... import as no-op
+        loaded = resolver._transitive_loads("pkg")
+        assert (pkg / "__init__.py").resolve() in loaded
+
+    def test_non_init_module_safe_when_init_does_not_import_it(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Shortening is still allowed when __init__.py does not load the file.
+
+        ``pkg/outside.py`` with ``from pkg.core import Thing`` IS shortenable
+        to ``from pkg import Thing`` when ``pkg/__init__.py`` only imports
+        ``.core`` — no cycle is possible because loading ``pkg`` does not
+        load ``outside.py``.
+        """
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text(
+            'from .core import Thing\n__all__ = ["Thing"]\n',
+        )
+        (pkg / "core.py").write_text("class Thing: ...\n")
+        (pkg / "outside.py").write_text(
+            "from pkg.core import Thing\n\ndef use() -> Thing: ...\n",
+        )
+
+        result, _ = check([tmp_path], src_roots=[tmp_path])
+        outside_violations = [v for v in result.violations if v.file_path.name == "outside.py"]
+        assert len(outside_violations) == 1
+        assert outside_violations[0].shorter_path == "pkg"
 
     def test_cli_no_paths_no_config(self, monkeypatch, tmp_path: Path) -> None:
         """CLI with no paths and no config src falls back to Path()."""

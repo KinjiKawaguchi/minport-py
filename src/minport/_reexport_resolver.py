@@ -36,6 +36,7 @@ class ReexportResolver:
         self._src_roots = list(src_roots)
         self._names_cache: dict[str, set[str]] = {}
         self._origin_cache: dict[tuple[str, str], Origin | None] = {}
+        self._loads_cache: dict[str, frozenset[Path]] = {}
 
     def find_shortest_path(self, module_path: str, name: str) -> str | None:
         """Return the shortest candidate module that safely re-exports *name*.
@@ -58,6 +59,59 @@ class ReexportResolver:
             if self._resolve_origin(candidate, name) == original_origin:
                 return candidate
         return None
+
+    def loads_file(self, module_path: str, target_file: Path) -> bool:
+        """Return True if loading *module_path* transitively loads *target_file*.
+
+        Used to detect circular imports: if shortening an import would make
+        the file read from a namespace whose initialization triggers loading
+        the file itself, the shortened form is unsafe.
+
+        Follows ``from .x import y``, ``import a.b.c``, and their variants
+        under runtime-reachable nodes (skips ``if TYPE_CHECKING:`` blocks).
+        """
+        try:
+            target_resolved = target_file.resolve()
+        except OSError:
+            return False
+        return target_resolved in self._transitive_loads(module_path)
+
+    def _transitive_loads(self, module_path: str) -> frozenset[Path]:
+        """Return resolved source files loaded transitively by *module_path*."""
+        if module_path in self._loads_cache:
+            return self._loads_cache[module_path]
+        self._loads_cache[module_path] = frozenset()
+        loaded: set[Path] = set()
+        visited: set[str] = set()
+        stack: list[str] = [module_path]
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            source_file = self._find_source_file(current)
+            if source_file is None:
+                continue
+            try:
+                loaded.add(source_file.resolve())
+            except OSError:
+                continue
+            tree = _safe_parse(source_file)
+            if tree is None:
+                continue
+            is_package = source_file.name == "__init__.py"
+            stack.extend(
+                imported
+                for imported in _iter_runtime_load_targets(
+                    tree,
+                    current,
+                    is_package=is_package,
+                )
+                if imported not in visited
+            )
+        result = frozenset(loaded)
+        self._loads_cache[module_path] = result
+        return result
 
     def has_name_conflict(self, name: str, module_path: str) -> bool:
         """Return True when a shorter candidate binds *name* to a different origin.
@@ -593,6 +647,62 @@ def _reexport_binding(node: ast.ImportFrom, name: str) -> _Binding | None:
                 level=node.level,
             )
     return None
+
+
+def _iter_runtime_load_targets(
+    tree: ast.Module,
+    current_module: str,
+    *,
+    is_package: bool,
+) -> Iterator[str]:
+    """Yield module paths that Python would load at runtime for *tree*.
+
+    Emits the target of each ``import`` / ``from ... import`` plus all parent
+    packages, since Python loads them during the import chain. Submodule
+    names in ``from pkg import X`` are also emitted as candidates; non-existent
+    ones are filtered out by ``_find_source_file``.
+
+    Statements under ``if TYPE_CHECKING:`` are skipped because their imports
+    are not actually executed at runtime.
+    """
+    for node in _iter_runtime_nodes(tree):
+        if isinstance(node, ast.ImportFrom):
+            yield from _load_targets_from_node(
+                node,
+                current_module,
+                is_package=is_package,
+            )
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                yield from _module_chain(alias.name)
+
+
+def _load_targets_from_node(
+    node: ast.ImportFrom,
+    current_module: str,
+    *,
+    is_package: bool,
+) -> Iterator[str]:
+    """Yield module paths that *node* causes Python to load."""
+    resolved = _resolve_relative_module(
+        current_module,
+        node.module or "",
+        node.level,
+        is_package=is_package,
+    )
+    if not resolved:
+        return
+    yield from _module_chain(resolved)
+    for alias in node.names:
+        if alias.name != "*":
+            yield f"{resolved}.{alias.name}"
+
+
+def _module_chain(module_path: str) -> Iterator[str]:
+    """Yield *module_path* and every ancestor package it would trigger."""
+    parts = module_path.split(".")
+    for i in range(1, len(parts) + 1):
+        yield ".".join(parts[:i])
 
 
 def _resolve_relative_module(
