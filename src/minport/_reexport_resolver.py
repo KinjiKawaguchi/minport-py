@@ -317,7 +317,13 @@ def _find_installed_source(module_path: str) -> Path | None:
 def _find_installed_origin(module_path: str) -> Path | None:
     try:
         spec = importlib.util.find_spec(module_path)
-    except (ImportError, ValueError):
+    except Exception:  # noqa: BLE001
+        # find_spec executes third-party module code (package __init__.py)
+        # during resolution. That code may raise anything — module-level
+        # AssertionError for platform guards (click/_winconsole.py),
+        # OSError, ImportError, or arbitrary custom exceptions. Treat any
+        # failure as \"module not usable\" and let the caller skip it
+        # rather than crashing the whole check run.
         return None
     if spec is None or spec.origin is None:
         return None
