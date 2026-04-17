@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
-from minport._reexport_resolver import ReexportResolver
+from minport._reexport_resolver import ReexportResolver, _find_installed_origin
 from minport.checker import check
 
 
@@ -64,6 +65,40 @@ class TestThirdPartyResolution:
         # Only A should be exported because of __all__
         assert "A" in exported
         assert "B" not in exported
+
+    def test_find_installed_origin_swallows_assertion_error(
+        self,
+        monkeypatch,
+    ) -> None:
+        """Issue #41: AssertionError from find_spec must not crash minport.
+
+        Third-party modules sometimes have module-level ``assert`` guards
+        (e.g. ``click._winconsole``: ``assert sys.platform == \"win32\"``).
+        When find_spec probes a submodule, it may trigger these asserts.
+        The resolver must treat such failures as \"module not usable\" and
+        skip rather than propagate the exception up.
+        """
+        msg = "simulated module-level assertion from third-party __init__"
+
+        def raising_find_spec(_name: str) -> None:
+            raise AssertionError(msg)
+
+        monkeypatch.setattr(importlib.util, "find_spec", raising_find_spec)
+        # Must not raise; should return None (module treated as unresolvable).
+        assert _find_installed_origin("anything.at.all") is None
+
+    def test_find_installed_origin_swallows_oserror(
+        self,
+        monkeypatch,
+    ) -> None:
+        """find_spec OSError (e.g. I/O during metadata scan) is also swallowed."""
+        msg = "simulated filesystem failure"
+
+        def raising_find_spec(_name: str) -> None:
+            raise OSError(msg)
+
+        monkeypatch.setattr(importlib.util, "find_spec", raising_find_spec)
+        assert _find_installed_origin("anything") is None
 
     def test_third_party_import_in_check(self, tmp_path: Path) -> None:
         """Test: check() handles third-party imports correctly."""
