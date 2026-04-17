@@ -207,7 +207,16 @@ ty (Astral製) を優先。利用不可なら pyright strict で代替。
 
 ### CI (`.github/workflows/ci.yml`)
 
-PR ごとに lint / typecheck / test / audit を並列実行。`all-checks-pass` をブランチ保護の required check にする。Python 3.11 + 3.12 + 3.13 + 3.14 マトリクステスト。開発は 3.14。
+PR ごとに lint / typecheck / test を並列実行。`all-checks-pass` をブランチ保護の required check にする。Python 3.11 + 3.12 + 3.13 + 3.14 マトリクステスト。開発は 3.14。
+
+### 依存管理と CVE 対応
+
+CVE 検知は以下 2 層で自動化する:
+
+1. **Renovate** (`renovate.json`): `vulnerabilityAlerts.automerge: true` で OSV DB ベースの CVE 検知時に修正 PR を即時作成・自動マージ。dev dep の patch/minor はグループ化して weekly 自動マージ、major は個別 PR で手動レビュー。
+2. **GitHub Dependabot alerts**: Repository 設定で有効化し、Renovate のカバレッジ漏れを検知する fallback。
+
+`pip-audit` を PR CI で実行することは**しない**。単一の dev-dep CVE で全 PR のマージがブロックされる運用リスク (#35 で具体化) の方が、CVE 検知の遅延リスクより大きいと判断した。ランタイム依存がゼロであり、dev-dep CVE はユーザーへの直接影響がないことも根拠。必要なら `pip-audit` をローカルで `uv run pip-audit` として手動実行可能。
 
 ### CD (`.github/workflows/release.yml`)
 
