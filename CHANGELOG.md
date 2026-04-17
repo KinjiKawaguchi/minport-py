@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/KinjiKawaguchi/minport-py/compare/v0.1.1...v0.1.2) (2026-04-17)
+
+
+### Bug Fixes
+
+* detect circular imports via transitive load analysis ([#33](https://github.com/KinjiKawaguchi/minport-py/issues/33)) ([aff7052](https://github.com/KinjiKawaguchi/minport-py/commit/aff7052defd09e36c19b4e611f04cfbc2e297025))
+
 ## [0.1.1](https://github.com/KinjiKawaguchi/minport-py/compare/v0.1.0...v0.1.1) (2026-04-12)
 
 
