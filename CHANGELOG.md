@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/KinjiKawaguchi/minport-py/compare/v0.1.2...v0.1.3) (2026-04-17)
+
+
+### Bug Fixes
+
+* swallow all exceptions from find_spec ([#42](https://github.com/KinjiKawaguchi/minport-py/issues/42)) ([68a40bd](https://github.com/KinjiKawaguchi/minport-py/commit/68a40bd4c6b1d31630894f3e2e9c5ccfe006f5bb))
+
 ## [0.1.2](https://github.com/KinjiKawaguchi/minport-py/compare/v0.1.1...v0.1.2) (2026-04-17)
 
 
