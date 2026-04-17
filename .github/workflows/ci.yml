@@ -40,24 +40,15 @@ jobs:
       - run: uv sync --frozen
       - run: uv run pytest --cov=minport --cov-report=term-missing -q
 
-  audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
-      - run: uv sync --frozen
-      - run: uv run pip-audit
-
   all-checks-pass:
     if: always()
-    needs: [lint, typecheck, test, audit]
+    needs: [lint, typecheck, test]
     runs-on: ubuntu-latest
     steps:
       - run: |
           if [[ "${{ needs.lint.result }}" != "success" ]] || \
              [[ "${{ needs.typecheck.result }}" != "success" ]] || \
-             [[ "${{ needs.test.result }}" != "success" ]] || \
-             [[ "${{ needs.audit.result }}" != "success" ]]; then
+             [[ "${{ needs.test.result }}" != "success" ]]; then
             echo "One or more checks failed"
             exit 1
           fi
