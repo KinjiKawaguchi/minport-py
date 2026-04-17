@@ -90,12 +90,14 @@ def _find_violations(
     for imp in parse_imports(pf.tree, file_path):
         if _is_suppressed(imp, pf.source_lines):
             continue
-        shorter = resolver.find_shortest_path(imp.module_path, imp.name)
+        shorter = resolver.find_shortest_path(
+            imp.module_path,
+            imp.name,
+            current_file=file_path,
+        )
         if shorter is None:
             continue
         if resolver.has_name_conflict(imp.name, imp.module_path):
-            continue
-        if _would_cause_cycle(file_path, shorter, resolver):
             continue
         violations.append(
             Violation(
@@ -248,29 +250,6 @@ def _collect_all_from_imports(tree: ast.Module) -> dict[tuple[str, str], int]:
         for alias in node.names:
             imports.setdefault((module, alias.name), node.lineno)
     return imports
-
-
-def _would_cause_cycle(
-    file_path: Path,
-    shorter_module: str,
-    resolver: ReexportResolver,
-) -> bool:
-    """Return True when shortening would cause a circular import.
-
-    A cycle is possible when loading *shorter_module* (i.e. running its
-    ``__init__.py``) would transitively load *file_path*. In that case,
-    ``from shorter_module import Name`` inside *file_path* would read from
-    a partially-initialized namespace.
-
-    Covers three patterns:
-
-    1. *file_path* is the ``__init__.py`` of *shorter_module* itself.
-    2. *file_path* is the ``__init__.py`` of a descendant package whose
-       ancestor ``__init__.py`` re-exports from it.
-    3. *file_path* is a regular module loaded by *shorter_module*'s
-       ``__init__.py`` (directly or transitively).
-    """
-    return resolver.loads_file(shorter_module, file_path)
 
 
 def _is_suppressed(

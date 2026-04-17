@@ -36,16 +36,25 @@ class ReexportResolver:
         self._src_roots = list(src_roots)
         self._names_cache: dict[str, set[str]] = {}
         self._origin_cache: dict[tuple[str, str], Origin | None] = {}
-        self._loads_cache: dict[str, frozenset[Path]] = {}
+        self._loads_cache: dict[tuple[str, frozenset[str]], frozenset[Path]] = {}
 
-    def find_shortest_path(self, module_path: str, name: str) -> str | None:
+    def find_shortest_path(
+        self,
+        module_path: str,
+        name: str,
+        *,
+        current_file: Path | None = None,
+    ) -> str | None:
         """Return the shortest candidate module that safely re-exports *name*.
 
-        A candidate is safe when its terminal origin (the file and symbol that
-        actually define *name*) equals the origin reached from *module_path*.
-        That lets legitimate re-export chains through parent packages shorten,
-        while rejecting candidates that would bind the same textual name to a
-        different underlying entity.
+        A candidate is safe when:
+
+        1. Its terminal origin (the file and symbol that actually define
+           *name*) equals the origin reached from *module_path*.
+        2. Loading the candidate does not transitively load *current_file*
+           (when provided). This prevents circular-import regressions, and
+           lets the next-shortest safe candidate be returned when the very
+           shortest would cycle.
         """
         parts = module_path.split(".")
         if len(parts) <= 1:
@@ -56,8 +65,11 @@ class ReexportResolver:
             return None
 
         for candidate in [".".join(parts[:i]) for i in range(1, len(parts))]:
-            if self._resolve_origin(candidate, name) == original_origin:
-                return candidate
+            if self._resolve_origin(candidate, name) != original_origin:
+                continue
+            if current_file is not None and self.loads_file(candidate, current_file):
+                continue
+            return candidate
         return None
 
     def loads_file(self, module_path: str, target_file: Path) -> bool:
@@ -67,6 +79,20 @@ class ReexportResolver:
         the file read from a namespace whose initialization triggers loading
         the file itself, the shortened form is unsafe.
 
+        The BFS distinguishes two cases based on whether *module_path* is an
+        ancestor of the file's module:
+
+        * **Ancestor candidate** (shortening to a wrapping package):
+          no skipping. Conservatively reports any path that reaches the
+          file, since the file reads from a partially-initialized
+          namespace whose name binding order cannot be verified statically.
+
+        * **Non-ancestor candidate** (sibling or cousin package):
+          skips the file's ancestor packages, which are already present in
+          ``sys.modules`` when the file is loading and will not re-execute.
+          This avoids false positives for patterns where an aggregator
+          ``__init__.py`` would otherwise be walked via the parent chain.
+
         Follows ``from .x import y``, ``import a.b.c``, and their variants
         under runtime-reachable nodes (skips ``if TYPE_CHECKING:`` blocks).
         """
@@ -74,19 +100,33 @@ class ReexportResolver:
             target_resolved = target_file.resolve()
         except OSError:
             return False
-        return target_resolved in self._transitive_loads(module_path)
+        target_module = self._file_to_module(target_file)
+        ancestors = self._ancestor_packages_of_file(target_file)
+        candidate_is_ancestor = module_path == target_module or module_path in ancestors
+        skip = frozenset() if candidate_is_ancestor else ancestors
+        return target_resolved in self._transitive_loads(module_path, skip)
 
-    def _transitive_loads(self, module_path: str) -> frozenset[Path]:
-        """Return resolved source files loaded transitively by *module_path*."""
-        if module_path in self._loads_cache:
-            return self._loads_cache[module_path]
-        self._loads_cache[module_path] = frozenset()
+    def _transitive_loads(
+        self,
+        module_path: str,
+        skip_modules: frozenset[str],
+    ) -> frozenset[Path]:
+        """Return resolved source files loaded transitively by *module_path*.
+
+        Modules listed in *skip_modules* are treated as already-loaded (their
+        ``__init__.py`` is not processed). This models Python's behavior
+        where a module in ``sys.modules`` is not re-initialized.
+        """
+        cache_key = (module_path, skip_modules)
+        if cache_key in self._loads_cache:
+            return self._loads_cache[cache_key]
+        self._loads_cache[cache_key] = frozenset()
         loaded: set[Path] = set()
         visited: set[str] = set()
         stack: list[str] = [module_path]
         while stack:
             current = stack.pop()
-            if current in visited:
+            if current in visited or current in skip_modules:
                 continue
             visited.add(current)
             source_file = self._find_source_file(current)
@@ -107,11 +147,46 @@ class ReexportResolver:
                     current,
                     is_package=is_package,
                 )
-                if imported not in visited
+                if imported not in visited and imported not in skip_modules
             )
         result = frozenset(loaded)
-        self._loads_cache[module_path] = result
+        self._loads_cache[cache_key] = result
         return result
+
+    def _ancestor_packages_of_file(self, file_path: Path) -> frozenset[str]:
+        """Return the dotted module paths of *file_path*'s ancestor packages."""
+        module = self._file_to_module(file_path)
+        if module is None:
+            return frozenset()
+        parts = module.split(".")
+        return frozenset(".".join(parts[:i]) for i in range(1, len(parts)))
+
+    def _file_to_module(self, file_path: Path) -> str | None:
+        """Map a source file path to its dotted module name."""
+        try:
+            resolved = file_path.resolve()
+        except OSError:
+            return None
+        best: tuple[str, ...] | None = None
+        for root in self._src_roots:
+            try:
+                root_resolved = root.resolve()
+            except OSError:
+                continue
+            try:
+                rel = resolved.relative_to(root_resolved)
+            except ValueError:
+                continue
+            parts = rel.parts
+            if parts[-1] == "__init__.py":
+                parts = parts[:-1]
+            elif parts[-1].endswith(".py"):
+                parts = (*parts[:-1], parts[-1][:-3])
+            else:
+                continue
+            if best is None or len(parts) < len(best):
+                best = parts
+        return ".".join(best) if best is not None and best else None
 
     def has_name_conflict(self, name: str, module_path: str) -> bool:
         """Return True when a shorter candidate binds *name* to a different origin.
