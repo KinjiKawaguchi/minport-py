@@ -23,7 +23,7 @@
   "packageRules": [
     {
       "description": "Group all dev dependencies into a single PR and auto-merge patch/minor.",
-      "matchDepTypes": ["dev"],
+      "matchDepTypes": ["dependency-groups"],
       "matchUpdateTypes": ["patch", "minor"],
       "groupName": "dev dependencies",
       "automerge": true,
@@ -32,7 +32,7 @@
     },
     {
       "description": "Major dev updates open individually for manual review.",
-      "matchDepTypes": ["dev"],
+      "matchDepTypes": ["dependency-groups"],
       "matchUpdateTypes": ["major"],
       "automerge": false
     }
