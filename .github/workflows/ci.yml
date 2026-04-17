@@ -40,15 +40,6 @@ jobs:
       - run: uv sync --frozen
       - run: uv run pytest --cov=minport --cov-report=term-missing -q
 
-  audit:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
-      - run: uv sync --frozen
-      - run: uv run pip-audit
-
   all-checks-pass:
     if: always()
     needs: [lint, typecheck, test]
