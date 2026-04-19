@@ -173,8 +173,11 @@ def _output_github(result: CheckResult) -> None:
         )
 
 
+_GITHUB_ESCAPES = str.maketrans({"%": "%25", "\r": "%0D", "\n": "%0A"})
+
+
 def _escape_github_message(s: str) -> str:
-    return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return s.translate(_GITHUB_ESCAPES)
 
 
 def _summary_line(result: CheckResult, fix_result: FixResult | None) -> str:
