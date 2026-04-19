@@ -81,7 +81,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     check_parser.add_argument(
         "--output-format",
-        dest="output_format",
         choices=["text", "github"],
         default="text",
         help="Output format (default: text)",
@@ -167,9 +166,10 @@ def _output_text(
 
 def _output_github(result: CheckResult) -> None:
     for v in result.violations:
+        title = f"minport ({v.code})"
         msg = _escape_github_message(v.message)
         sys.stdout.write(
-            f"::error file={v.file_path},line={v.line},col={v.col},title={v.code}::{msg}\n"
+            f"::error file={v.file_path},line={v.line},col={v.col},title={title}::{msg}\n"
         )
 
 

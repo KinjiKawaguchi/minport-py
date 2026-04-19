@@ -453,8 +453,12 @@ class TestCLI:
         assert exit_code == 1
         assert "::error " in captured.out
         assert "file=" in captured.out
-        assert "title=MP001" in captured.out
+        assert "title=minport (MP001)" in captured.out
         assert "can be shortened" in captured.out
+        assert (
+            captured.out == f"::error file={tmp_path}/test.py,line=1,col=1,title=minport (MP001)::"
+            "`from pkg.sub.module import Name` can be shortened to `from pkg.sub import Name`\n"
+        )
 
     def test_output_format_github_no_summary(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
