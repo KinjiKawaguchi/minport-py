@@ -165,12 +165,15 @@ def _output_text(
 
 
 def _output_github(result: CheckResult) -> None:
+    cwd = Path.cwd()
     for v in result.violations:
         title = f"minport ({v.code})"
+        try:
+            file: Path = v.file_path.relative_to(cwd)
+        except ValueError:
+            file = v.file_path
         msg = _escape_github_message(v.message)
-        sys.stdout.write(
-            f"::error file={v.file_path},line={v.line},col={v.col},title={title}::{msg}\n"
-        )
+        sys.stdout.write(f"::error file={file},line={v.line},col={v.col},title={title}::{msg}\n")
 
 
 _GITHUB_ESCAPES = str.maketrans({"%": "%25", "\r": "%0D", "\n": "%0A"})

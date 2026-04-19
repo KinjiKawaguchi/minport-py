@@ -430,7 +430,7 @@ class TestCLI:
         assert "gen_file.py" not in captured.out
 
     def test_output_format_github_violations(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """--output-format github で ::error 形式が出力される。"""
         pkg = tmp_path / "pkg"
@@ -444,6 +444,39 @@ class TestCLI:
 
         test_file = tmp_path / "test.py"
         test_file.write_text("from pkg.sub.module import Name\n")
+
+        monkeypatch.chdir(tmp_path)
+
+        exit_code = main(["check", str(test_file), "--output-format", "github"])
+        captured = capsys.readouterr()
+
+        assert exit_code == 1
+        assert "::error " in captured.out
+        assert "file=" in captured.out
+        assert "title=minport (MP001)" in captured.out
+        assert "can be shortened" in captured.out
+        assert (
+            captured.out == "::error file=test.py,line=1,col=1,title=minport (MP001)::"
+            "`from pkg.sub.module import Name` can be shortened to `from pkg.sub import Name`\n"
+        )
+
+    def test_output_format_github_violations_from_no_cwd(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """対象ファイルが存在するディレクトリでない場所からチェックをした時、ファイルパスがフルパスで表示される"""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+
+        (pkg / "__init__.py").write_text("")
+        (sub / "__init__.py").write_text("from .module import Name\n")
+        (sub / "module.py").write_text("Name = 1\n")
+
+        test_file = tmp_path / "test.py"
+        test_file.write_text("from pkg.sub.module import Name\n")
+
+        monkeypatch.chdir(tmp_path / "pkg")
 
         exit_code = main(
             ["check", str(test_file), "--output-format", "github", "--src", str(tmp_path)]
