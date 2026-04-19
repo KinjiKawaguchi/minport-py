@@ -429,6 +429,94 @@ class TestCLI:
         assert exit_code == 1
         assert "gen_file.py" not in captured.out
 
+    def test_output_format_github_violations(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--output-format github で ::error 形式が出力される。"""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+
+        (pkg / "__init__.py").write_text("")
+        (sub / "__init__.py").write_text("from .module import Name\n")
+        (sub / "module.py").write_text("Name = 1\n")
+
+        test_file = tmp_path / "test.py"
+        test_file.write_text("from pkg.sub.module import Name\n")
+
+        exit_code = main(
+            ["check", str(test_file), "--output-format", "github", "--src", str(tmp_path)]
+        )
+        captured = capsys.readouterr()
+
+        assert exit_code == 1
+        assert "::error " in captured.out
+        assert "file=" in captured.out
+        assert "title=MP001" in captured.out
+        assert "can be shortened" in captured.out
+
+    def test_output_format_github_no_summary(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--output-format github はサマリを出力しない。"""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+
+        (pkg / "__init__.py").write_text("")
+        (sub / "__init__.py").write_text("from .module import Name\n")
+        (sub / "module.py").write_text("Name = 1\n")
+
+        test_file = tmp_path / "test.py"
+        test_file.write_text("from pkg.sub.module import Name\n")
+
+        exit_code = main(
+            ["check", str(test_file), "--output-format", "github", "--src", str(tmp_path)]
+        )
+        captured = capsys.readouterr()
+
+        assert exit_code == 1
+        assert "::error " in captured.out
+        assert "Found" not in captured.out
+
+    def test_output_format_github_no_violations_silent(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--output-format github は違反なしのとき何も出力しない。"""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("import sys\n")
+
+        exit_code = main(["check", str(test_file), "--output-format", "github"])
+        captured = capsys.readouterr()
+
+        assert exit_code == 0
+        assert captured.out == ""
+
+    def test_output_format_default_is_text(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--output-format 未指定時は text フォーマット(既存動作を維持)。"""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        sub = pkg / "sub"
+        sub.mkdir()
+
+        (pkg / "__init__.py").write_text("")
+        (sub / "__init__.py").write_text("from .module import Name\n")
+        (sub / "module.py").write_text("Name = 1\n")
+
+        test_file = tmp_path / "test.py"
+        test_file.write_text("from pkg.sub.module import Name\n")
+
+        exit_code = main(["check", str(test_file), "--src", str(tmp_path)])
+        captured = capsys.readouterr()
+
+        assert exit_code == 1
+        assert "::error " not in captured.out
+        assert "MP001" in captured.out
+
     def test_extend_exclude_merges_with_exclude(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
