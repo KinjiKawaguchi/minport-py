@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/KinjiKawaguchi/minport-py/compare/v0.1.3...v0.2.0) (2026-04-20)
+
+
+### Features
+
+* add --output-format github for GitHub Actions annotations ([#44](https://github.com/KinjiKawaguchi/minport-py/issues/44)) ([0f47098](https://github.com/KinjiKawaguchi/minport-py/commit/0f4709871c7d71f5446a32efb67fe594125f9fc1))
+
+
+### Documentation
+
+* trim docs/ and CLAUDE.md to what can't be derived from code ([#47](https://github.com/KinjiKawaguchi/minport-py/issues/47)) ([aecdfd7](https://github.com/KinjiKawaguchi/minport-py/commit/aecdfd7e8a2a9af6882ac0a758b77e7375b65535))
+
 ## [0.1.3](https://github.com/KinjiKawaguchi/minport-py/compare/v0.1.2...v0.1.3) (2026-04-17)
 
 
