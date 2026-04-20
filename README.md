@@ -69,6 +69,7 @@ minport check src/ --extend-exclude "generated/*"  # Add to default excludes
 minport check src/ --config path/to/pyproject.toml  # Custom config path
 minport check src/ --fix                 # Auto-fix in place
 minport check src/ --quiet               # Suppress the summary line
+minport check src/ --output-format github  # output for github annotations
 ```
 
 **Exit codes:** `0` = no violations, `1` = violations found, `2` = error (e.g. path not found).
@@ -176,8 +177,9 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install minport
-      - run: minport check src/
+      - run: minport check src/ --output-format github
 ```
+The `--output-format github` flag emits [GitHub Actions workflow commands](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands#setting-an-error-message), so violations appear as inline annotations on the PR file view.
 
 ## Limitations
 

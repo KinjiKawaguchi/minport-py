@@ -79,6 +79,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Suppress the summary line",
     )
+    check_parser.add_argument(
+        "--output-format",
+        choices=["text", "github"],
+        default="text",
+        help="Output format (default: text)",
+    )
     check_parser.set_defaults(handler=_handle_check)
     return parser
 
@@ -102,7 +108,10 @@ def _handle_check(args: argparse.Namespace) -> int:
     check_result, fix_result = check(
         paths, src_roots=src_roots, exclude=exclude, extend_exclude=extend_exclude, fix=args.fix
     )
-    _output_text(check_result, fix_result, quiet=args.quiet)
+    if args.output_format == "github":
+        _output_github(check_result)
+    else:
+        _output_text(check_result, fix_result, quiet=args.quiet)
 
     return 1 if check_result.violations else 0
 
@@ -153,6 +162,25 @@ def _output_text(
     if quiet:
         return
     sys.stdout.write(_summary_line(result, fix_result))
+
+
+def _output_github(result: CheckResult) -> None:
+    cwd = Path.cwd()
+    for v in result.violations:
+        title = f"minport ({v.code})"
+        try:
+            file: Path = v.file_path.relative_to(cwd)
+        except ValueError:
+            file = v.file_path
+        msg = _escape_github_message(v.message)
+        sys.stdout.write(f"::error file={file},line={v.line},col={v.col},title={title}::{msg}\n")
+
+
+_GITHUB_ESCAPES = str.maketrans({"%": "%25", "\r": "%0D", "\n": "%0A"})
+
+
+def _escape_github_message(s: str) -> str:
+    return s.translate(_GITHUB_ESCAPES)
 
 
 def _summary_line(result: CheckResult, fix_result: FixResult | None) -> str:
