@@ -244,11 +244,14 @@ minport check src/ --fix                 # チェック + 自動修正
 minport check src/ --src src/            # ソースルート指定
 minport check src/ --exclude "tests/*"   # 除外
 minport check src/ --quiet               # サマリ行を抑止
+minport check src/ --output-format github  # GitHub Actions 形式で出力
 ```
 
 ### 出力
 
-サマリ行は常に出力される（`--quiet` で抑止可）。違反 0 件でも `Found 0 errors (checked N files).` を出し、walk 件数を明示する。
+デフォルト (text) 形式ではサマリ行を出力する。違反 0 件でも `Found 0 errors (checked N files).` を出すのは、チェック対象が 0 件だった状況をユーザが検知できるようにするため。`--quiet` で抑止可。
+
+`--output-format github` では GitHub Actions の workflow command (`::error ...`) を出力し、サマリ行は出さない（PR 注釈のみが目的のため）。
 
 ```
 src/app/service.py:3:1: MP001 `from pydantic.fields import FieldInfo` can be shortened to `from pydantic import FieldInfo`
