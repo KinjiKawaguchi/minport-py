@@ -96,4 +96,3 @@ cli.py → checker.py → _import_parser.py
 - ユーザ向け README: [README.md](README.md)
 - 依存・ツール設定: `pyproject.toml`
 - CI / CD ワークフロー: `.github/workflows/`
-- テストケース概要: [docs/test-cases.md](docs/test-cases.md)
