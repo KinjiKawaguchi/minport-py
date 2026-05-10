@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Run minport against fixed targets and report timing statistics.
 
-Targets are cloned by ./setup.sh into .cache/<name>/. Self-target uses
-the in-repo src/minport. Each target is timed `runs` times after `warmup`
-warm runs; we report median, min, max, stdev, and ms-per-file.
+Targets are cloned by setup.py into .cache/<name>/. Self-target uses
+the in-repo src/minport. Each target is timed ``runs`` times after
+``warmup`` warm runs; we report median, min, max, stdev, and ms-per-file.
 
 Usage:
-    ./benchmarks/run.py                      # default: 3 warmup, 10 runs
-    ./benchmarks/run.py --runs 5 --warmup 1
-    ./benchmarks/run.py --only django,flask  # subset
+    uv run --group benchmarks benchmarks/run.py
+    uv run --group benchmarks benchmarks/run.py --runs 5 --warmup 1
+    uv run --group benchmarks benchmarks/run.py --only django,flask
 """
 
 from __future__ import annotations
