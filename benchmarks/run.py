@@ -7,8 +7,8 @@ the in-repo src/minport. Each target is timed ``runs`` times after
 
 Usage:
     uv run --group benchmarks benchmarks/run.py
-    uv run --group benchmarks benchmarks/run.py --runs 5 --warmup 1
-    uv run --group benchmarks benchmarks/run.py --only django,flask
+    uv run --group benchmarks benchmarks/run.py --runs 10 --warmup 3
+    uv run --group benchmarks benchmarks/run.py --only langgraph
 """
 
 from __future__ import annotations
@@ -124,8 +124,8 @@ def print_table(results: list[Result]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--warmup", type=int, default=3)
-    parser.add_argument("--runs", type=int, default=10)
+    parser.add_argument("--warmup", type=int, default=1)
+    parser.add_argument("--runs", type=int, default=3)
     parser.add_argument(
         "--only",
         type=str,
