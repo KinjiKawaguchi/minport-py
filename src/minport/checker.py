@@ -23,22 +23,29 @@ from minport._reexport_resolver import ReexportResolver
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from minport._progress import ProgressCallback
+
 _INLINE_SUPPRESS = "minport: ignore"
 
 
-def check(
+def check(  # noqa: PLR0913 - public facade; bundling kwargs into an options object would churn callers.
     paths: Sequence[Path],
     *,
     src_roots: Sequence[Path] | None = None,
     exclude: Sequence[str] | None = None,
     extend_exclude: Sequence[str] = (),
     fix: bool = False,
+    progress: ProgressCallback | None = None,
 ) -> tuple[CheckResult, FixResult | None]:
     """Run the full minport check on the given paths.
 
     When *exclude* is ``None`` (the default), :data:`DEFAULT_EXCLUDES` is used.
     Pass an explicit list to override the defaults entirely.
     *extend_exclude* patterns are always appended to the effective exclude list.
+
+    *progress*, if given, is invoked as ``progress(completed, total)`` after each
+    file is parsed and analyzed (or skipped). ``total`` reflects the discovered
+    file count; ``completed`` increments monotonically and ends at ``total``.
     """
     effective_src = list(src_roots) if src_roots else _infer_src_roots(paths)
     base_exclude = tuple(exclude) if exclude is not None else DEFAULT_EXCLUDES
@@ -49,17 +56,17 @@ def check(
 
     parsed: dict[Path, ParsedFile] = {}
     skipped: list[tuple[Path, str]] = []
+    all_violations: list[Violation] = []
+    total = len(files)
 
-    for file_path in files:
+    for index, file_path in enumerate(files, start=1):
         pf = _safe_parse(file_path, skipped)
         if pf is not None:
             parsed[file_path] = pf
+            all_violations.extend(_find_violations(file_path, pf, resolver))
+        if progress is not None:
+            progress(index, total)
 
-    all_violations: list[Violation] = []
-    for file_path, pf in parsed.items():
-        all_violations.extend(
-            _find_violations(file_path, pf, resolver),
-        )
     all_violations.sort(key=lambda v: (str(v.file_path), v.line, v.col))
 
     files_violations: dict[Path, list[Violation]] = {}

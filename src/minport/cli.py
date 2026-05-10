@@ -8,6 +8,7 @@ import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from minport._progress import ProgressReporter
 from minport.checker import check
 
 if TYPE_CHECKING:
@@ -105,9 +106,24 @@ def _handle_check(args: argparse.Namespace) -> int:
             sys.stderr.write(f"Error: path does not exist: {p}\n")
             return 2
 
-    check_result, fix_result = check(
-        paths, src_roots=src_roots, exclude=exclude, extend_exclude=extend_exclude, fix=args.fix
+    reporter = ProgressReporter(
+        stream=sys.stderr,
+        enabled=(
+            not args.quiet and args.output_format != "github" and sys.stderr.isatty()
+        ),
     )
+    try:
+        check_result, fix_result = check(
+            paths,
+            src_roots=src_roots,
+            exclude=exclude,
+            extend_exclude=extend_exclude,
+            fix=args.fix,
+            progress=reporter.update,
+        )
+    finally:
+        reporter.close()
+
     if args.output_format == "github":
         _output_github(check_result)
     else:
