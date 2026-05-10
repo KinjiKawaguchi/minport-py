@@ -92,36 +92,6 @@ CLI arguments override `pyproject.toml` settings.
 
 minport automatically skips common non-source directories (`.venv`, `__pycache__`, `.git`, `node_modules`, `dist`, `site-packages`, etc.). Use `--exclude` to override these defaults entirely, or `--extend-exclude` to add patterns on top of them.
 
-### Persistent Cache
-
-To avoid re-walking third-party packages on every run, minport stores
-`find_spec` results in `~/.cache/minport/find_spec/<venv>.sqlite` (or
-`$XDG_CACHE_HOME/minport/...`). The cache is keyed by Python executable
-path; switching venvs creates a fresh cache. Entries are invalidated
-automatically when the resolved file's `mtime` changes or its on-disk
-file disappears.
-
-Knobs:
-
-| Setting | Effect |
-|---|---|
-| `--no-cache` | Skip the persistent cache for this invocation. |
-| `MINPORT_NO_CACHE=1` | Same, but as an env var (persists across invocations in a shell session). |
-| `MINPORT_CACHE_DIR=<path>` | Override the cache root. Useful when `$HOME` is on a slow filesystem. |
-| `XDG_CACHE_HOME=<path>` | Standard XDG base dir; minport stores under `<path>/minport`. |
-
-For CI, configure `actions/cache@v4` to persist `~/.cache/minport`
-across runs, keyed on `uv.lock` (or your requirements file):
-
-```yaml
-- uses: actions/cache@v4
-  with:
-    path: ~/.cache/minport
-    key: minport-${{ runner.os }}-${{ hashFiles('**/uv.lock') }}
-    restore-keys: |
-      minport-${{ runner.os }}-
-```
-
 ## Rules
 
 | Code | Name | Description | Fixable |
@@ -207,10 +177,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/minport
+          key: minport-${{ runner.os }}-${{ hashFiles('**/uv.lock') }}
+          restore-keys: minport-${{ runner.os }}-
       - run: pip install minport
       - run: minport check src/ --output-format github
 ```
-The `--output-format github` flag emits [GitHub Actions workflow commands](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands#setting-an-error-message), so violations appear as inline annotations on the PR file view.
+The `--output-format github` flag emits [GitHub Actions workflow commands](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands#setting-an-error-message), so violations appear as inline annotations on the PR file view. The `actions/cache` step persists `~/.cache/minport` across runs so the second invocation skips re-resolving third-party packages.
 
 ## Limitations
 
