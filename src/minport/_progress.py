@@ -2,8 +2,11 @@ r"""stderr progress reporter for ``minport check``.
 
 Renders an animated single-line progress display:
 
-    ⠋ [████████░░░░░░░░] 250/500 · 50% · 1.2s
+    ⠋ [████████░░░░░░░░] 250/500 · +1840 deps · 50% · 1.2s
 
+- The bar reflects user-file progress; it always reaches 100% on completion.
+- ``+K deps`` (suppressed when zero) shows how many extra files the resolver
+  parsed while walking third-party re-export chains.
 - Hides the cursor while active (restored on close).
 - Spinner uses braille frames and advances per emit.
 - Throttles updates to ~10Hz, except the final update which always emits.
@@ -45,9 +48,15 @@ _MINUTES_PER_HOUR = 60
 
 
 class ProgressCallback(Protocol):
-    """Per-file progress hook injected into :func:`minport.checker.check`."""
+    """Per-file progress hook injected into :func:`minport.checker.check`.
 
-    def __call__(self, completed: int, total: int) -> None: ...
+    ``completed``/``total`` measure user files only (so the bar reaches 100%
+    when every user file has been processed). ``extras`` is the count of
+    non-user files the resolver has parsed while walking re-export chains;
+    it is informational and never affects the bar fill ratio.
+    """
+
+    def __call__(self, completed: int, total: int, extras: int) -> None: ...
 
 
 class ProgressReporter:
@@ -76,8 +85,12 @@ class ProgressReporter:
         self._color = color
         self._term_width = terminal_width or _default_terminal_width
 
-    def update(self, completed: int, total: int) -> None:
-        """Render progress for ``completed``/``total`` if not throttled."""
+    def update(self, completed: int, total: int, extras: int = 0) -> None:
+        """Render progress for ``completed``/``total`` if not throttled.
+
+        ``extras`` is shown as ``+K deps`` when positive; it does not affect
+        the bar fill, which only follows ``completed/total``.
+        """
         if not self._enabled or total <= 0:
             return
         now = self._now()
@@ -91,7 +104,7 @@ class ProgressReporter:
             self._cursor_hidden = True
 
         elapsed = now - self._start
-        line = self._render(completed, total, elapsed)
+        line = self._render(completed, total, extras, elapsed)
         self._stream.write(_CLEAR_LINE + line)
         self._stream.flush()
 
@@ -115,21 +128,26 @@ class ProgressReporter:
         self._stream.flush()
         self._cursor_hidden = False
 
-    def _render(self, completed: int, total: int, elapsed: float) -> str:
+    def _render(self, completed: int, total: int, extras: int, elapsed: float) -> str:
         spinner = _SPINNER_FRAMES[self._spinner_index]
         clamped = min(max(completed, 0), total)
         percent = int(clamped * 100 / total)
         counts = f"{clamped}/{total}"
         elapsed_s = self._format_elapsed(elapsed)
+        deps = f"+{extras} deps" if extras > 0 else None
 
+        sep = self._paint("·", _DIM)
         sp = self._paint(spinner, _CYAN)
         counts_c = self._paint(counts, _BOLD)
-        sep = self._paint("·", _DIM)
+        deps_c = self._paint(deps, _DIM) if deps is not None else None
         pct_c = self._paint(f"{percent}%", _DIM)
         elapsed_c = self._paint(elapsed_s, _DIM)
-        suffix = f" {counts_c} {sep} {pct_c} {sep} {elapsed_c}"
 
-        raw_suffix_cols = len(f" {counts} · {percent}% · {elapsed_s}")
+        suffix_segments = [counts_c, *([deps_c] if deps_c else []), pct_c, elapsed_c]
+        suffix = " " + f" {sep} ".join(suffix_segments)
+        raw_segments = [counts, *([deps] if deps else []), f"{percent}%", elapsed_s]
+        raw_suffix_cols = len(" " + " · ".join(raw_segments))
+
         width = self._term_width()
         bar_width = width - _SPINNER_COLS - _BAR_CHROME_COLS - raw_suffix_cols
         if bar_width < _MIN_BAR_WIDTH:
@@ -151,13 +169,13 @@ def _default_terminal_width() -> int:
 
 
 class ProgressTracker:
-    """Bridge that emits ``progress(completed, total)`` with a dynamic total.
+    """Bridge that emits ``progress(user_done, user_total, extras)``.
 
-    ``total`` reflects user files (known up front) plus distinct extra files
-    parsed by the resolver while walking re-export chains. ``completed`` only
-    advances on user-file completion. The denominator therefore inflates as
-    third-party graphs are explored, mirroring pyrefly's display where the bar
-    grows slowly because the total is moving while the numerator catches up.
+    The bar fills strictly with user-file progress (denominator stays at the
+    initial user_total), while ``extras`` accumulates each distinct non-user
+    file the resolver parses. This keeps the bar reaching 100% on completion
+    and surfaces the third-party workload as a side-counter the renderer can
+    show as ``+K deps``.
     """
 
     def __init__(
@@ -188,4 +206,4 @@ class ProgressTracker:
         self._emit()
 
     def _emit(self) -> None:
-        self._cb(self._user_done, self._user_total + self._extra)
+        self._cb(self._user_done, self._user_total, self._extra)
