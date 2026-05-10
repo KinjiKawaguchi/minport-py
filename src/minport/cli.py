@@ -88,6 +88,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default="text",
         help="Output format (default: text)",
     )
+    check_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable the persistent find_spec cache for this run. "
+            "Equivalent to setting MINPORT_NO_CACHE=1."
+        ),
+    )
     check_parser.set_defaults(handler=_handle_check)
     return parser
 
@@ -113,7 +122,7 @@ def _handle_check(args: argparse.Namespace) -> int:
         enabled=(not args.quiet and args.output_format != "github" and sys.stderr.isatty()),
     )
     try:
-        with open_origin_cache(_resolve_cache_root()) as cache:
+        with open_origin_cache(_resolve_cache_root(no_cache=args.no_cache)) as cache:
             check_result, fix_result = check(
                 paths,
                 src_roots=src_roots,
@@ -134,11 +143,12 @@ def _handle_check(args: argparse.Namespace) -> int:
     return 1 if check_result.violations else 0
 
 
-def _resolve_cache_root() -> Path | None:
+def _resolve_cache_root(*, no_cache: bool = False) -> Path | None:
     """Return the persistent cache root, or None if persistence is disabled.
 
     Resolution order:
-    1. ``MINPORT_NO_CACHE`` (any truthy value) → ``None`` (disabled).
+    1. ``no_cache=True`` (from ``--no-cache``) or ``MINPORT_NO_CACHE`` set
+       → ``None`` (disabled).
     2. ``MINPORT_CACHE_DIR`` → explicit override path.
     3. ``XDG_CACHE_HOME/minport`` per the XDG Base Directory spec.
     4. ``~/.cache/minport`` (XDG default).
@@ -146,9 +156,9 @@ def _resolve_cache_root() -> Path | None:
     SQLite on NFS is roughly 1000x slower per operation than on local
     disk due to file-locking overhead. Users with NFS-mounted home
     directories should set ``MINPORT_CACHE_DIR`` to a local-disk path,
-    or ``MINPORT_NO_CACHE=1`` to skip persistence entirely.
+    or ``MINPORT_NO_CACHE=1`` / ``--no-cache`` to skip persistence.
     """
-    if os.environ.get("MINPORT_NO_CACHE"):
+    if no_cache or os.environ.get("MINPORT_NO_CACHE"):
         return None
     env = os.environ.get("MINPORT_CACHE_DIR")
     if env:

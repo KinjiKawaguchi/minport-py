@@ -598,9 +598,14 @@ class TestResolveCacheRoot:
     MINPORT_NO_CACHE > MINPORT_CACHE_DIR > XDG_CACHE_HOME > $HOME.
     """
 
-    def test_returns_none_when_no_cache_set(self) -> None:
+    def test_returns_none_when_env_set(self) -> None:
         with patch.dict(os.environ, {"MINPORT_NO_CACHE": "1"}, clear=False):
             assert _resolve_cache_root() is None
+
+    def test_returns_none_when_no_cache_flag(self) -> None:
+        with patch.dict(os.environ, {}, clear=False) as env:
+            env.pop("MINPORT_NO_CACHE", None)
+            assert _resolve_cache_root(no_cache=True) is None
 
     def test_minport_cache_dir_overrides(self, tmp_path: Path) -> None:
         env = {"MINPORT_CACHE_DIR": str(tmp_path / "x")}
