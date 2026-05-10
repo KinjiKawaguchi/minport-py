@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from minport._module_locator import find_installed_origin
-from minport._persistent_cache import InstalledOriginCache, open_origin_cache
+from minport._persistent_cache import (
+    _SCHEMA_VERSION,
+    InstalledOriginCache,
+    _minport_version,
+    open_origin_cache,
+)
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestInstalledOriginCache:
@@ -166,3 +176,98 @@ class TestOpenOriginCacheContextManager:
         blocker.write_text("x")
         with open_origin_cache(blocker) as cache:
             assert cache is None
+
+
+class TestLoadValidation:
+    """The on-disk JSON envelope is validated; malformed/corrupt files
+    must be treated as empty rather than crashing."""
+
+    @staticmethod
+    def _cache_file(root: Path) -> Path:
+        cache = InstalledOriginCache(root)
+        path = cache._path  # type: ignore[attr-defined]
+        cache.close()
+        path.unlink(missing_ok=True)
+        return path
+
+    def test_corrupted_json_is_ignored(self, tmp_path: Path) -> None:
+        path = self._cache_file(tmp_path / "cache")
+        path.write_text("{ not valid json")
+        cache = InstalledOriginCache(tmp_path / "cache")
+        try:
+            assert cache.get("anything") == (False, None)
+        finally:
+            cache.close()
+
+    def test_non_dict_envelope_is_ignored(self, tmp_path: Path) -> None:
+        path = self._cache_file(tmp_path / "cache")
+        path.write_text('["not", "a", "dict"]')
+        cache = InstalledOriginCache(tmp_path / "cache")
+        try:
+            assert cache.get("anything") == (False, None)
+        finally:
+            cache.close()
+
+    def test_non_dict_entries_field_is_ignored(self, tmp_path: Path) -> None:
+        path = self._cache_file(tmp_path / "cache")
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": _SCHEMA_VERSION,
+                    "minport_version": _minport_version,
+                    "entries": "not a dict",
+                }
+            )
+        )
+        cache = InstalledOriginCache(tmp_path / "cache")
+        try:
+            assert cache.get("anything") == (False, None)
+        finally:
+            cache.close()
+
+    def test_malformed_entries_are_skipped_individually(self, tmp_path: Path) -> None:
+        target = tmp_path / "real.py"
+        target.write_text("x = 1\n")
+        good_mtime = target.stat().st_mtime
+        path = self._cache_file(tmp_path / "cache")
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": _SCHEMA_VERSION,
+                    "minport_version": _minport_version,
+                    "entries": {
+                        "bad_shape": [1, 2, 3],
+                        "bad_path_type": [42, 1.0],
+                        "bad_mtime_type": ["x", "not float"],
+                        "good": [str(target), good_mtime],
+                    },
+                }
+            )
+        )
+        cache = InstalledOriginCache(tmp_path / "cache")
+        try:
+            assert cache.get("good") == (True, target)
+            assert cache.get("bad_shape") == (False, None)
+            assert cache.get("bad_path_type") == (False, None)
+            assert cache.get("bad_mtime_type") == (False, None)
+        finally:
+            cache.close()
+
+
+class TestFlushFailure:
+    def test_flush_swallows_oserror(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        cache = InstalledOriginCache(tmp_path / "cache")
+        target = tmp_path / "real.py"
+        target.write_text("x = 1\n")
+        cache.set("x", target)
+
+        original = Path.write_text
+
+        def boom(self: Path, *args: object, **kwargs: object) -> int:
+            if self.suffix == ".tmp":
+                msg = "disk full"
+                raise OSError(msg)
+            return original(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "write_text", boom)
+        cache.close()
