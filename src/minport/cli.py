@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from minport._persistent_cache import open_origin_cache
 from minport._progress import ProgressReporter
 from minport.checker import check
 
@@ -86,6 +88,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default="text",
         help="Output format (default: text)",
     )
+    check_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable the persistent find_spec cache for this run. "
+            "Equivalent to setting MINPORT_NO_CACHE=1."
+        ),
+    )
     check_parser.set_defaults(handler=_handle_check)
     return parser
 
@@ -111,14 +122,16 @@ def _handle_check(args: argparse.Namespace) -> int:
         enabled=(not args.quiet and args.output_format != "github" and sys.stderr.isatty()),
     )
     try:
-        check_result, fix_result = check(
-            paths,
-            src_roots=src_roots,
-            exclude=exclude,
-            extend_exclude=extend_exclude,
-            fix=args.fix,
-            progress=reporter.update,
-        )
+        with open_origin_cache(_resolve_cache_root(no_cache=args.no_cache)) as cache:
+            check_result, fix_result = check(
+                paths,
+                src_roots=src_roots,
+                exclude=exclude,
+                extend_exclude=extend_exclude,
+                fix=args.fix,
+                progress=reporter.update,
+                installed_origin_cache=cache,
+            )
     finally:
         reporter.close()
 
@@ -128,6 +141,32 @@ def _handle_check(args: argparse.Namespace) -> int:
         _output_text(check_result, fix_result, quiet=args.quiet)
 
     return 1 if check_result.violations else 0
+
+
+def _resolve_cache_root(*, no_cache: bool = False) -> Path | None:
+    """Return the persistent cache root, or None if persistence is disabled.
+
+    Resolution order:
+    1. ``no_cache=True`` (from ``--no-cache``) or ``MINPORT_NO_CACHE`` set
+       → ``None`` (disabled).
+    2. ``MINPORT_CACHE_DIR`` → explicit override path.
+    3. ``XDG_CACHE_HOME/minport`` per the XDG Base Directory spec.
+    4. ``~/.cache/minport`` (XDG default).
+
+    SQLite on NFS is roughly 1000x slower per operation than on local
+    disk due to file-locking overhead. Users with NFS-mounted home
+    directories should set ``MINPORT_CACHE_DIR`` to a local-disk path,
+    or ``MINPORT_NO_CACHE=1`` / ``--no-cache`` to skip persistence.
+    """
+    if no_cache or os.environ.get("MINPORT_NO_CACHE"):
+        return None
+    env = os.environ.get("MINPORT_CACHE_DIR")
+    if env:
+        return Path(env)
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg:
+        return Path(xdg) / "minport"
+    return Path.home() / ".cache" / "minport"
 
 
 def _load_config(config_path: Path | None) -> dict[str, object]:

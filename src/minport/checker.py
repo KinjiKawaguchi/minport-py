@@ -24,6 +24,7 @@ from minport._reexport_resolver import ReexportResolver
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from minport._persistent_cache import InstalledOriginCache
     from minport._progress import ProgressCallback
 
 _INLINE_SUPPRESS = "minport: ignore"
@@ -37,6 +38,7 @@ def check(  # noqa: PLR0913 - public facade; bundling kwargs into an options obj
     extend_exclude: Sequence[str] = (),
     fix: bool = False,
     progress: ProgressCallback | None = None,
+    installed_origin_cache: InstalledOriginCache | None = None,
 ) -> tuple[CheckResult, FixResult | None]:
     """Run the full minport check on the given paths.
 
@@ -48,6 +50,10 @@ def check(  # noqa: PLR0913 - public facade; bundling kwargs into an options obj
     ``total`` reflects user files plus distinct extra files parsed by the
     re-export resolver while walking third-party graphs (pyrefly-style dynamic
     total). ``completed`` advances on each user file fully checked.
+
+    *installed_origin_cache* enables cross-run memoization of
+    installed-module resolution. Pass ``None`` (the default) to disable
+    persistence.
     """
     effective_src = list(src_roots) if src_roots else _infer_src_roots(paths)
     base_exclude = tuple(exclude) if exclude is not None else DEFAULT_EXCLUDES
@@ -57,6 +63,7 @@ def check(  # noqa: PLR0913 - public facade; bundling kwargs into an options obj
     tracker = _build_tracker(progress, files)
     resolver = ReexportResolver(
         effective_src,
+        installed_origin_cache=installed_origin_cache,
         on_parse=tracker.file_parsed_by_resolver if tracker is not None else None,
     )
     if tracker is not None:

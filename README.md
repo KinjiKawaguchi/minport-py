@@ -70,6 +70,7 @@ minport check src/ --config path/to/pyproject.toml  # Custom config path
 minport check src/ --fix                 # Auto-fix in place
 minport check src/ --quiet               # Suppress the summary line
 minport check src/ --output-format github  # output for github annotations
+minport check src/ --no-cache            # Disable the persistent cache for this run
 ```
 
 **Exit codes:** `0` = no violations, `1` = violations found, `2` = error (e.g. path not found).
@@ -90,6 +91,14 @@ CLI arguments override `pyproject.toml` settings.
 ### Default Excludes
 
 minport automatically skips common non-source directories (`.venv`, `__pycache__`, `.git`, `node_modules`, `dist`, `site-packages`, etc.). Use `--exclude` to override these defaults entirely, or `--extend-exclude` to add patterns on top of them.
+
+### Environment Variables
+
+| Variable | Effect |
+|---|---|
+| `MINPORT_NO_CACHE=1` | Skip the persistent `find_spec` cache (same as `--no-cache`). |
+| `MINPORT_CACHE_DIR=<path>` | Override the cache root. Defaults to `$XDG_CACHE_HOME/minport` or `~/.cache/minport`. |
+| `XDG_CACHE_HOME=<path>` | Standard XDG base dir; minport stores the cache under `<path>/minport`. |
 
 ## Rules
 
@@ -176,10 +185,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/minport
+          key: minport-${{ runner.os }}-${{ hashFiles('**/uv.lock') }}
+          restore-keys: minport-${{ runner.os }}-
       - run: pip install minport
       - run: minport check src/ --output-format github
 ```
-The `--output-format github` flag emits [GitHub Actions workflow commands](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands#setting-an-error-message), so violations appear as inline annotations on the PR file view.
+The `--output-format github` flag emits [GitHub Actions workflow commands](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands#setting-an-error-message), so violations appear as inline annotations on the PR file view. The `actions/cache` step persists `~/.cache/minport` across runs so the second invocation skips re-resolving third-party packages.
 
 ## Limitations
 
