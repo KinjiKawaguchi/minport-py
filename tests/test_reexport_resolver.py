@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 from typing import ClassVar
 
@@ -708,3 +709,171 @@ class TestReexportResolver:
 
         with pytest.raises(TypeError, match=r"Unhandled ast\.stmt subclass"):
             list(_child_stmt_blocks(_FakeStmt()))
+
+
+class TestLoadsFileHeuristic:
+    """The fast-path heuristic: third-party candidates (outside --src) skip the BFS."""
+
+    def test_third_party_candidate_returns_false_without_bfs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Build a user package under --src.
+        src = tmp_path / "src"
+        (src / "user_pkg").mkdir(parents=True)
+        (src / "user_pkg" / "__init__.py").write_text("")
+        user_file = src / "user_pkg" / "consumer.py"
+        user_file.write_text("")
+
+        resolver = ReexportResolver([src])
+
+        # Verify the heuristic triggers for an installed third-party module
+        # (pytest is installed in the dev env). Spy on _transitive_loads to
+        # confirm it is NOT called when the heuristic kicks in.
+        bfs_calls: list[tuple[str, frozenset[str]]] = []
+        original = resolver._transitive_loads
+
+        def spy(module_path: str, skip: frozenset[str]) -> frozenset[Path]:
+            bfs_calls.append((module_path, skip))
+            return original(module_path, skip)
+
+        monkeypatch.setattr(resolver, "_transitive_loads", spy)
+
+        result = resolver.loads_file("pytest", user_file)
+
+        assert result is False
+        assert bfs_calls == []  # heuristic skipped the BFS
+
+    def test_user_code_candidate_still_runs_bfs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        src = tmp_path / "src"
+        (src / "pkg_a").mkdir(parents=True)
+        (src / "pkg_a" / "__init__.py").write_text("")
+        (src / "pkg_b").mkdir(parents=True)
+        (src / "pkg_b" / "__init__.py").write_text("")
+        user_file = src / "pkg_a" / "consumer.py"
+        user_file.write_text("")
+
+        resolver = ReexportResolver([src])
+
+        bfs_calls: list[tuple[str, frozenset[str]]] = []
+        original = resolver._transitive_loads
+
+        def spy(module_path: str, skip: frozenset[str]) -> frozenset[Path]:
+            bfs_calls.append((module_path, skip))
+            return original(module_path, skip)
+
+        monkeypatch.setattr(resolver, "_transitive_loads", spy)
+
+        resolver.loads_file("pkg_b", user_file)
+
+        assert bfs_calls, "expected BFS to run for a candidate under --src"
+
+    def test_unresolvable_candidate_skips_bfs(self, tmp_path: Path) -> None:
+        # No --src roots: every module_path is unresolvable.
+        resolver = ReexportResolver([tmp_path / "nonexistent_src"])
+        user_file = tmp_path / "consumer.py"
+        user_file.write_text("")
+        assert resolver.loads_file("definitely.not.a.real.module", user_file) is False
+
+    def test_source_outside_all_src_roots(self, tmp_path: Path) -> None:
+        # Candidate file is in a directory that isn't any --src root.
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "stray.py").write_text("")
+        src = tmp_path / "src"
+        src.mkdir()
+        user_file = tmp_path / "user.py"
+        user_file.write_text("")
+
+        resolver = ReexportResolver([src])
+        # _find_source_file won't find "stray" under src, falls back to find_spec
+        # which also doesn't know about it. So source is None → False.
+        assert resolver.loads_file("stray", user_file) is False
+
+    def test_src_root_with_oserror_is_skipped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Two --src roots; the first raises OSError on resolve(), the second is valid.
+        good_src = tmp_path / "src"
+        (good_src / "pkg").mkdir(parents=True)
+        (good_src / "pkg" / "__init__.py").write_text("")
+        user_file = good_src / "pkg" / "consumer.py"
+        user_file.write_text("")
+
+        bad_src = tmp_path / "bad"
+        bad_src.mkdir()
+
+        resolver = ReexportResolver([bad_src, good_src])
+
+        original_resolve = Path.resolve
+
+        def maybe_raise(self: Path, *args: object, **kwargs: object) -> Path:
+            if self == bad_src:
+                msg = "simulated"
+                raise OSError(msg)
+            return original_resolve(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "resolve", maybe_raise)
+        # candidate resolves to good_src/pkg/__init__.py; bad_src.resolve() raises
+        # but the loop continues to good_src and succeeds.
+        # _is_user_code should still return True.
+        assert resolver._is_user_code("pkg") is True
+
+    def test_source_resolve_oserror(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        src = tmp_path / "src"
+        (src / "pkg").mkdir(parents=True)
+        (src / "pkg" / "__init__.py").write_text("")
+        resolver = ReexportResolver([src])
+        source = src / "pkg" / "__init__.py"
+
+        # Force the source's resolve() to raise.
+        original_resolve = Path.resolve
+
+        def maybe_raise(self: Path, *args: object, **kwargs: object) -> Path:
+            if self == source:
+                msg = "simulated"
+                raise OSError(msg)
+            return original_resolve(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "resolve", maybe_raise)
+        assert resolver._is_user_code("pkg") is False
+
+    def test_ambiguous_path_treated_as_user_code(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Candidate resolves to a path that's neither under --src nor under
+        # sys.prefix — typical of editable-installed workspace members.
+        src = tmp_path / "src"
+        src.mkdir()
+        outside = tmp_path / "workspace_member"
+        outside.mkdir()
+        member_init = outside / "__init__.py"
+        member_init.write_text("")
+
+        resolver = ReexportResolver([src])
+        monkeypatch.setattr(resolver, "_find_source_file", lambda _: member_init)
+        assert resolver._is_user_code("workspace_member") is True
+
+    def test_sys_prefix_resolve_oserror_fails_safe(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        outside = tmp_path / "other" / "module.py"
+        outside.parent.mkdir()
+        outside.write_text("")
+
+        resolver = ReexportResolver([src])
+        monkeypatch.setattr(resolver, "_find_source_file", lambda _: outside)
+
+        original_resolve = Path.resolve
+
+        def maybe_raise(self: Path, *args: object, **kwargs: object) -> Path:
+            if str(self) == sys.prefix:
+                msg = "simulated"
+                raise OSError(msg)
+            return original_resolve(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "resolve", maybe_raise)
+        assert resolver._is_user_code("other.module") is True

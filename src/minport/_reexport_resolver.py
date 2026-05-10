@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -94,8 +95,22 @@ class ReexportResolver:
         the file read from a namespace whose initialization triggers loading
         the file itself, the shortened form is unsafe.
 
-        The BFS distinguishes two cases based on whether *module_path* is an
-        ancestor of the file's module:
+        **Fast path**: when *module_path* resolves outside the configured
+        ``--src`` roots (i.e. it lives in site-packages / an installed
+        package), it cannot transitively import *target_file* — third-party
+        code does not depend on the user's source tree. Skip the BFS and
+        return False directly. This eliminates the largest single-file
+        latency spike on projects with heavy third-party graphs (langchain,
+        etc.) where the transitive closure can include thousands of files.
+
+        Caveat: monorepo workspaces that install internal packages editable
+        into site-packages will hit the fast path incorrectly **unless**
+        every workspace member's source root is passed via ``--src``. The
+        existing ``--src`` contract handles this — the constraint is just
+        more visible now.
+
+        Otherwise, the BFS distinguishes two cases based on whether
+        *module_path* is an ancestor of the file's module:
 
         * **Ancestor candidate** (shortening to a wrapping package):
           no skipping. Conservatively reports any path that reaches the
@@ -115,11 +130,57 @@ class ReexportResolver:
             target_resolved = target_file.resolve()
         except OSError:
             return False
+        if not self._is_user_code(module_path):
+            return False
         target_module = self._file_to_module(target_file)
         ancestors = self._ancestor_packages_of_file(target_file)
         candidate_is_ancestor = module_path == target_module or module_path in ancestors
         skip = frozenset() if candidate_is_ancestor else ancestors
         return target_resolved in self._transitive_loads(module_path, skip)
+
+    def _is_user_code(self, module_path: str) -> bool:
+        """Decide whether the circular-import BFS for *module_path* is needed.
+
+        Returns True when the candidate may transitively import user code,
+        in which case ``loads_file`` runs the full BFS. Returns False when
+        the candidate is definitely third-party and the BFS would do
+        provably empty work.
+
+        Classification:
+
+        * Resolves under any ``--src`` root → user code (True).
+        * Resolves under ``sys.prefix`` (the active venv's site-packages)
+          → third-party (False).
+        * Otherwise → ambiguous (e.g. editable-installed workspace member
+          living outside the venv). Conservatively treat as user code
+          (True) so cross-package cycles are still detected.
+        """
+        source = self._find_source_file(module_path)
+        if source is None:
+            return False
+        try:
+            resolved = source.resolve()
+        except OSError:
+            return False
+        for root in self._src_roots:
+            try:
+                root_resolved = root.resolve()
+            except OSError:
+                continue
+            try:
+                resolved.relative_to(root_resolved)
+            except ValueError:
+                continue
+            return True
+        try:
+            venv_prefix = Path(sys.prefix).resolve()
+        except OSError:
+            return True  # cannot classify; fail safe to user code
+        try:
+            resolved.relative_to(venv_prefix)
+        except ValueError:
+            return True  # outside --src and outside venv: treat as user code
+        return False
 
     def _transitive_loads(
         self,
