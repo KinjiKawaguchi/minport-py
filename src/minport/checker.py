@@ -59,6 +59,9 @@ def check(  # noqa: PLR0913 - public facade; bundling kwargs into an options obj
     all_violations: list[Violation] = []
     total = len(files)
 
+    if progress is not None and total > 0:
+        progress(0, total)
+
     for index, file_path in enumerate(files, start=1):
         pf = _safe_parse(file_path, skipped)
         if pf is not None:
