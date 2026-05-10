@@ -176,6 +176,41 @@ class TestProgressReporter:
         assert "\x1b[2m" in out  # dim suffix
         assert "\x1b[32m" in out  # green filled bar
 
+    def test_extras_suffix_omitted_when_zero(self) -> None:
+        stream = _FakeTTY()
+        clock = _FakeClock([0.0, 0.0])
+        reporter = _reporter(stream, clock=clock, width=120)
+        reporter.update(50, 100, 0)
+        plain = _strip_ansi(stream.getvalue())
+        assert "deps" not in plain
+        assert "50/100" in plain
+
+    def test_extras_suffix_shown_when_positive(self) -> None:
+        stream = _FakeTTY()
+        clock = _FakeClock([0.0, 0.0])
+        reporter = _reporter(stream, clock=clock, width=120)
+        reporter.update(50, 100, 1840)
+        plain = _strip_ansi(stream.getvalue())
+        assert "+1840 deps" in plain
+
+    def test_bar_fills_only_with_user_progress_not_extras(self) -> None:
+        stream = _FakeTTY()
+        clock = _FakeClock([0.0, 0.0])
+        reporter = _reporter(stream, clock=clock, width=120)
+        # Lots of extras but only 1/2 user files done → bar should be ~50% filled.
+        reporter.update(1, 2, 9999)
+        plain = _strip_ansi(stream.getvalue())
+        assert "1/2" in plain
+        assert "50%" in plain
+        # Bar inside [...]: roughly half filled, half empty.
+        bar_segment = plain.split("[", 1)[1].split("]", 1)[0]
+        filled = bar_segment.count("█")
+        empty = bar_segment.count("░")
+        assert filled > 0
+        assert empty > 0
+        # Within ±1 of equal halves (integer division rounding).
+        assert abs(filled - empty) <= 1
+
     def test_no_color_env_disables_color(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("NO_COLOR", "1")
         stream = _FakeTTY()
@@ -214,11 +249,11 @@ class TestElapsedFormatting:
 
 
 class TestProgressTracker:
-    def _calls(self) -> tuple[list[tuple[int, int]], object]:
-        seen: list[tuple[int, int]] = []
+    def _calls(self) -> tuple[list[tuple[int, int, int]], object]:
+        seen: list[tuple[int, int, int]] = []
 
-        def cb(completed: int, total: int) -> None:
-            seen.append((completed, total))
+        def cb(completed: int, total: int, extras: int) -> None:
+            seen.append((completed, total, extras))
 
         return seen, cb
 
@@ -226,24 +261,25 @@ class TestProgressTracker:
         seen, cb = self._calls()
         tracker = ProgressTracker(cb, [Path("a.py"), Path("b.py")])
         tracker.start()
-        assert seen == [(0, 2)]
+        assert seen == [(0, 2, 0)]
 
-    def test_advance_user_increments_numerator(self) -> None:
+    def test_advance_user_increments_numerator_only(self) -> None:
         seen, cb = self._calls()
         tracker = ProgressTracker(cb, [Path("a.py"), Path("b.py")])
         tracker.start()
         tracker.advance_user()
         tracker.advance_user()
-        assert seen[-1] == (2, 2)
+        # Bar reaches 100% on user-file completion regardless of extras.
+        assert seen[-1] == (2, 2, 0)
 
-    def test_resolver_parse_grows_total_for_non_user_files(self) -> None:
+    def test_resolver_parse_increments_extras_keeping_total_fixed(self) -> None:
         seen, cb = self._calls()
         tracker = ProgressTracker(cb, [Path("a.py")])
         tracker.start()
         tracker.file_parsed_by_resolver(Path("/site-packages/numpy/__init__.py"))
         tracker.file_parsed_by_resolver(Path("/site-packages/numpy/core.py"))
-        # numerator unchanged, denominator grew by 2
-        assert seen[-1] == (0, 3)
+        # Denominator stays at user_total; extras grew by 2.
+        assert seen[-1] == (0, 1, 2)
 
     def test_resolver_parse_skips_user_files(self) -> None:
         seen, cb = self._calls()
@@ -252,7 +288,7 @@ class TestProgressTracker:
         tracker.start()
         tracker.file_parsed_by_resolver(user)
         # Only the start() emit; user-file parses do not re-emit.
-        assert seen == [(0, 1)]
+        assert seen == [(0, 1, 0)]
 
 
 class TestProgressInCLI:
