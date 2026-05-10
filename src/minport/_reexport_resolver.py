@@ -11,7 +11,7 @@ from minport._module_locator import find_installed_source, module_chain, resolve
 from minport._source_loader import safe_parse
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence
     from typing import NoReturn
 
     from minport._persistent_cache import PersistentSpecCache
@@ -41,6 +41,7 @@ class ReexportResolver:
         src_roots: Sequence[Path],
         *,
         spec_cache: PersistentSpecCache | None = None,
+        on_parse: Callable[[Path], None] | None = None,
     ) -> None:
         self._src_roots = list(src_roots)
         # In-process caches collapse duplicate work within a single check run.
@@ -50,6 +51,7 @@ class ReexportResolver:
         self._parse_cache: dict[Path, ast.Module | None] = {}
         self._source_file_cache: dict[str, Path | None] = {}
         self._spec_cache = spec_cache  # cross-run cache; None disables it
+        self._on_parse = on_parse
 
     def find_shortest_path(
         self,
@@ -446,6 +448,8 @@ class ReexportResolver:
     def _parse(self, path: Path) -> ast.Module | None:
         if path not in self._parse_cache:
             self._parse_cache[path] = safe_parse(path)
+            if self._on_parse is not None:
+                self._on_parse(path)
         return self._parse_cache[path]
 
 
