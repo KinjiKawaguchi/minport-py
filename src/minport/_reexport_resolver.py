@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import ast
-import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from minport._module_locator import find_installed_source
+from minport._source_loader import safe_parse
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -37,6 +39,12 @@ class ReexportResolver:
         self._names_cache: dict[str, set[str]] = {}
         self._origin_cache: dict[tuple[str, str], Origin | None] = {}
         self._loads_cache: dict[tuple[str, frozenset[str]], frozenset[Path]] = {}
+        # Hot-path memoization. Resolution walks re-export chains, so the same
+        # module path and the same __init__.py file are revisited many times.
+        # Without these, projects with deep third-party graphs (langchain,
+        # numpy, urllib3) parse the same file hundreds of times per check run.
+        self._parse_cache: dict[Path, ast.Module | None] = {}
+        self._source_file_cache: dict[str, Path | None] = {}
 
     def find_shortest_path(
         self,
@@ -136,7 +144,7 @@ class ReexportResolver:
                 loaded.add(source_file.resolve())
             except OSError:
                 continue
-            tree = _safe_parse(source_file)
+            tree = self._parse(source_file)
             if tree is None:
                 continue
             is_package = source_file.name == "__init__.py"
@@ -214,7 +222,7 @@ class ReexportResolver:
         source_file = self._find_source_file(module_path)
         names: set[str] = set()
         if source_file is not None:
-            tree = _safe_parse(source_file)
+            tree = self._parse(source_file)
             if tree is not None:
                 names = self._extract_exported_names(
                     tree,
@@ -279,7 +287,7 @@ class ReexportResolver:
         source_file = self._find_source_file(module_path)
         if source_file is None:
             return set()
-        tree = _safe_parse(source_file)
+        tree = self._parse(source_file)
         if tree is None:
             return set()
 
@@ -352,7 +360,7 @@ class ReexportResolver:
         source_file = self._find_source_file(module_path)
         if source_file is None:
             return None
-        tree = _safe_parse(source_file)
+        tree = self._parse(source_file)
         if tree is None:
             return None
 
@@ -379,7 +387,7 @@ class ReexportResolver:
         source_file = self._find_source_file(module_path)
         if source_file is None:
             return None
-        tree = _safe_parse(source_file)
+        tree = self._parse(source_file)
         if tree is None:
             return None
 
@@ -405,7 +413,7 @@ class ReexportResolver:
         source_file = self._find_source_file(target_module)
         if source_file is None:
             return False
-        tree = _safe_parse(source_file)
+        tree = self._parse(source_file)
         if tree is None:
             return False
         all_names = _collect_all_names(tree)
@@ -415,6 +423,11 @@ class ReexportResolver:
 
     def _find_source_file(self, module_path: str) -> Path | None:
         """Find ``__init__.py`` or the ``.py`` module file for *module_path*."""
+        if module_path not in self._source_file_cache:
+            self._source_file_cache[module_path] = self._compute_source_file(module_path)
+        return self._source_file_cache[module_path]
+
+    def _compute_source_file(self, module_path: str) -> Path | None:
         parts = module_path.split(".")
         for root in self._src_roots:
             init = root / Path(*parts) / "__init__.py"
@@ -423,40 +436,12 @@ class ReexportResolver:
             module_file = root / Path(*parts[:-1]) / f"{parts[-1]}.py"
             if module_file.is_file():
                 return module_file
-        return _find_installed_source(module_path)
+        return find_installed_source(module_path)
 
-
-def _safe_parse(path: Path) -> ast.Module | None:
-    """Read and parse a Python file, returning None on any parse failure."""
-    try:
-        source = path.read_text(encoding="utf-8")
-        return ast.parse(source)
-    except (OSError, UnicodeDecodeError, SyntaxError):
-        return None
-
-
-def _find_installed_source(module_path: str) -> Path | None:
-    """Find the source file (.py or __init__.py) of an installed module."""
-    origin = _find_installed_origin(module_path)
-    if origin is None or origin.suffix != ".py":
-        return None
-    return origin
-
-
-def _find_installed_origin(module_path: str) -> Path | None:
-    try:
-        spec = importlib.util.find_spec(module_path)
-    except Exception:  # noqa: BLE001
-        # find_spec executes third-party module code (package __init__.py)
-        # during resolution. That code may raise anything — module-level
-        # AssertionError for platform guards (click/_winconsole.py),
-        # OSError, ImportError, or arbitrary custom exceptions. Treat any
-        # failure as \"module not usable\" and let the caller skip it
-        # rather than crashing the whole check run.
-        return None
-    if spec is None or spec.origin is None:
-        return None
-    return Path(spec.origin)
+    def _parse(self, path: Path) -> ast.Module | None:
+        if path not in self._parse_cache:
+            self._parse_cache[path] = safe_parse(path)
+        return self._parse_cache[path]
 
 
 def _collect_reexported_names(tree: ast.Module) -> set[str]:
