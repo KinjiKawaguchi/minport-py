@@ -110,12 +110,6 @@ Knobs:
 | `MINPORT_CACHE_DIR=<path>` | Override the cache root. Useful when `$HOME` is on a slow filesystem. |
 | `XDG_CACHE_HOME=<path>` | Standard XDG base dir; minport stores under `<path>/minport`. |
 
-**NFS / network-mounted homes:** SQLite over NFS is roughly 1000x
-slower per operation due to file-locking overhead. If `$HOME` is on
-NFS, set `MINPORT_CACHE_DIR` to a local-disk path (e.g. `/tmp/minport`,
-though it will be cleared on reboot), or use `MINPORT_NO_CACHE=1` to
-opt out entirely.
-
 For CI, configure `actions/cache@v4` to persist `~/.cache/minport`
 across runs, keyed on `uv.lock` (or your requirements file):
 
