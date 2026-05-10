@@ -18,6 +18,7 @@ from minport._models import (
     ParsedFile,
     Violation,
 )
+from minport._progress import ProgressTracker
 from minport._reexport_resolver import ReexportResolver
 
 if TYPE_CHECKING:
@@ -43,32 +44,35 @@ def check(  # noqa: PLR0913 - public facade; bundling kwargs into an options obj
     Pass an explicit list to override the defaults entirely.
     *extend_exclude* patterns are always appended to the effective exclude list.
 
-    *progress*, if given, is invoked as ``progress(completed, total)`` after each
-    file is parsed and analyzed (or skipped). ``total`` reflects the discovered
-    file count; ``completed`` increments monotonically and ends at ``total``.
+    *progress*, if given, is invoked as ``progress(completed, total)``.
+    ``total`` reflects user files plus distinct extra files parsed by the
+    re-export resolver while walking third-party graphs (pyrefly-style dynamic
+    total). ``completed`` advances on each user file fully checked.
     """
     effective_src = list(src_roots) if src_roots else _infer_src_roots(paths)
     base_exclude = tuple(exclude) if exclude is not None else DEFAULT_EXCLUDES
     effective_exclude = (*base_exclude, *extend_exclude)
     files = _collect_files(paths, effective_exclude)
 
-    resolver = ReexportResolver(effective_src)
+    tracker = _build_tracker(progress, files)
+    resolver = ReexportResolver(
+        effective_src,
+        on_parse=tracker.file_parsed_by_resolver if tracker is not None else None,
+    )
+    if tracker is not None:
+        tracker.start()
 
     parsed: dict[Path, ParsedFile] = {}
     skipped: list[tuple[Path, str]] = []
     all_violations: list[Violation] = []
-    total = len(files)
 
-    if progress is not None and total > 0:
-        progress(0, total)
-
-    for index, file_path in enumerate(files, start=1):
+    for file_path in files:
         pf = _safe_parse(file_path, skipped)
         if pf is not None:
             parsed[file_path] = pf
             all_violations.extend(_find_violations(file_path, pf, resolver))
-        if progress is not None:
-            progress(index, total)
+        if tracker is not None:
+            tracker.advance_user()
 
     all_violations.sort(key=lambda v: (str(v.file_path), v.line, v.col))
 
@@ -88,6 +92,15 @@ def check(  # noqa: PLR0913 - public facade; bundling kwargs into an options obj
     if not fix:
         return result, None
     return result, fix_files(fixable)
+
+
+def _build_tracker(
+    progress: ProgressCallback | None,
+    files: Sequence[Path],
+) -> ProgressTracker | None:
+    if progress is None:
+        return None
+    return ProgressTracker(progress, files)
 
 
 def _find_violations(

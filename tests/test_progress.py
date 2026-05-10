@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import io
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from minport._progress import ProgressReporter
+from minport._progress import ProgressReporter, ProgressTracker
 from minport.cli import main
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     import pytest
 
 
@@ -191,6 +190,64 @@ class TestProgressReporter:
         reporter.update(50, 100)
         assert "\x1b[36m" not in stream.getvalue()
         assert "\x1b[32m" not in stream.getvalue()
+
+
+class TestElapsedFormatting:
+    def test_sub_minute_uses_seconds_with_decimal(self) -> None:
+        assert ProgressReporter._format_elapsed(0.0) == "0.0s"
+        assert ProgressReporter._format_elapsed(12.345) == "12.3s"
+        assert ProgressReporter._format_elapsed(59.9) == "59.9s"
+
+    def test_minute_or_more_switches_to_mmss(self) -> None:
+        assert ProgressReporter._format_elapsed(60.0) == "1m00s"
+        assert ProgressReporter._format_elapsed(125.0) == "2m05s"
+        assert ProgressReporter._format_elapsed(3599.0) == "59m59s"
+
+    def test_hour_or_more_switches_to_hhmm(self) -> None:
+        assert ProgressReporter._format_elapsed(3600.0) == "1h00m"
+        assert ProgressReporter._format_elapsed(7325.0) == "2h02m"
+
+
+class TestProgressTracker:
+    def _calls(self) -> tuple[list[tuple[int, int]], object]:
+        seen: list[tuple[int, int]] = []
+
+        def cb(completed: int, total: int) -> None:
+            seen.append((completed, total))
+
+        return seen, cb
+
+    def test_start_emits_initial_zero_over_user_total(self) -> None:
+        seen, cb = self._calls()
+        tracker = ProgressTracker(cb, [Path("a.py"), Path("b.py")])
+        tracker.start()
+        assert seen == [(0, 2)]
+
+    def test_advance_user_increments_numerator(self) -> None:
+        seen, cb = self._calls()
+        tracker = ProgressTracker(cb, [Path("a.py"), Path("b.py")])
+        tracker.start()
+        tracker.advance_user()
+        tracker.advance_user()
+        assert seen[-1] == (2, 2)
+
+    def test_resolver_parse_grows_total_for_non_user_files(self) -> None:
+        seen, cb = self._calls()
+        tracker = ProgressTracker(cb, [Path("a.py")])
+        tracker.start()
+        tracker.file_parsed_by_resolver(Path("/site-packages/numpy/__init__.py"))
+        tracker.file_parsed_by_resolver(Path("/site-packages/numpy/core.py"))
+        # numerator unchanged, denominator grew by 2
+        assert seen[-1] == (0, 3)
+
+    def test_resolver_parse_skips_user_files(self) -> None:
+        seen, cb = self._calls()
+        user = Path("a.py")
+        tracker = ProgressTracker(cb, [user])
+        tracker.start()
+        tracker.file_parsed_by_resolver(user)
+        # Only the start() emit; user-file parses do not re-emit.
+        assert seen == [(0, 1)]
 
 
 class TestProgressInCLI:

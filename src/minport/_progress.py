@@ -20,7 +20,8 @@ import time
 from typing import IO, TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
+    from pathlib import Path
 
 
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -38,6 +39,9 @@ _RESET = "\x1b[0m"
 _BAR_CHROME_COLS = 2  # "[" and "]"
 _SPINNER_COLS = 2  # spinner glyph + trailing space
 _MIN_BAR_WIDTH = 4  # below this, drop the bar entirely
+
+_SECONDS_PER_MINUTE = 60
+_MINUTES_PER_HOUR = 60
 
 
 class ProgressCallback(Protocol):
@@ -93,6 +97,16 @@ class ProgressReporter:
 
         self._spinner_index = (self._spinner_index + 1) % len(_SPINNER_FRAMES)
 
+    @staticmethod
+    def _format_elapsed(seconds: float) -> str:
+        if seconds < _SECONDS_PER_MINUTE:
+            return f"{seconds:.1f}s"
+        m, s = divmod(int(seconds), _SECONDS_PER_MINUTE)
+        if m < _MINUTES_PER_HOUR:
+            return f"{m}m{s:02d}s"
+        h, m = divmod(m, _MINUTES_PER_HOUR)
+        return f"{h}h{m:02d}m"
+
     def close(self) -> None:
         """Clear the progress line and restore the cursor."""
         if not self._enabled or not self._cursor_hidden:
@@ -106,7 +120,7 @@ class ProgressReporter:
         clamped = min(max(completed, 0), total)
         percent = int(clamped * 100 / total)
         counts = f"{clamped}/{total}"
-        elapsed_s = f"{elapsed:.1f}s"
+        elapsed_s = self._format_elapsed(elapsed)
 
         sp = self._paint(spinner, _CYAN)
         counts_c = self._paint(counts, _BOLD)
@@ -134,3 +148,44 @@ class ProgressReporter:
 
 def _default_terminal_width() -> int:
     return shutil.get_terminal_size((80, 24)).columns
+
+
+class ProgressTracker:
+    """Bridge that emits ``progress(completed, total)`` with a dynamic total.
+
+    ``total`` reflects user files (known up front) plus distinct extra files
+    parsed by the resolver while walking re-export chains. ``completed`` only
+    advances on user-file completion. The denominator therefore inflates as
+    third-party graphs are explored, mirroring pyrefly's display where the bar
+    grows slowly because the total is moving while the numerator catches up.
+    """
+
+    def __init__(
+        self,
+        callback: ProgressCallback,
+        user_files: Iterable[Path],
+    ) -> None:
+        self._cb = callback
+        self._user_files: frozenset[Path] = frozenset(user_files)
+        self._user_total = len(self._user_files)
+        self._user_done = 0
+        self._extra = 0
+
+    def start(self) -> None:
+        """Emit the initial 0/user_total event."""
+        self._emit()
+
+    def advance_user(self) -> None:
+        """Mark one user file as fully checked."""
+        self._user_done += 1
+        self._emit()
+
+    def file_parsed_by_resolver(self, path: Path) -> None:
+        """Record a parse event from the resolver. User files are ignored."""
+        if path in self._user_files:
+            return
+        self._extra += 1
+        self._emit()
+
+    def _emit(self) -> None:
+        self._cb(self._user_done, self._user_total + self._extra)
