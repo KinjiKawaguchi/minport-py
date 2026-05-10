@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0](https://github.com/KinjiKawaguchi/minport-py/compare/v0.2.0...v0.3.0) (2026-05-10)
+
+
+### Features
+
+* **cli:** show stderr progress while checking large codebases ([#61](https://github.com/KinjiKawaguchi/minport-py/issues/61)) ([a59ff88](https://github.com/KinjiKawaguchi/minport-py/commit/a59ff8877d0950b7445786c6866a5090fd23ae62))
+* **progress:** show extras as `+N deps` suffix; bar always reaches 100% ([#63](https://github.com/KinjiKawaguchi/minport-py/issues/63)) ([1ab078a](https://github.com/KinjiKawaguchi/minport-py/commit/1ab078aa6a00c6a3375d43cb72c721334c265d10))
+
+
+### Performance Improvements
+
+* persistent find_spec cache for cross-run lookups ([#62](https://github.com/KinjiKawaguchi/minport-py/issues/62)) ([f0b6ae0](https://github.com/KinjiKawaguchi/minport-py/commit/f0b6ae01d904a155a8c5b03632cf6244288300d9))
+* **resolver:** cache hot-path lookups + extract module locator/loader ([#58](https://github.com/KinjiKawaguchi/minport-py/issues/58)) ([e227ad0](https://github.com/KinjiKawaguchi/minport-py/commit/e227ad0f182f66777b26a79bcc8aa35b6f6c4116))
+
 ## [0.2.0](https://github.com/KinjiKawaguchi/minport-py/compare/v0.1.3...v0.2.0) (2026-04-20)
 
 
