@@ -90,8 +90,7 @@ class PersistentSpecCache:
         if not self._pending:
             return
         rows = [
-            (mp, str(p) if p is not None else None, mt)
-            for mp, (p, mt) in self._pending.items()
+            (mp, str(p) if p is not None else None, mt) for mp, (p, mt) in self._pending.items()
         ]
         with self._conn:
             self._conn.executemany(
@@ -109,8 +108,7 @@ class PersistentSpecCache:
     def _ensure_schema(self) -> None:
         with self._conn:
             self._conn.execute(
-                "CREATE TABLE IF NOT EXISTS meta ("
-                "  key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+                "CREATE TABLE IF NOT EXISTS meta (  key TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
             self._conn.execute(
                 "CREATE TABLE IF NOT EXISTS entries ("

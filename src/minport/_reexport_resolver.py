@@ -767,7 +767,3 @@ def _load_targets_from_node(
     for alias in node.names:
         if alias.name != "*":
             yield f"{resolved}.{alias.name}"
-
-
-
-

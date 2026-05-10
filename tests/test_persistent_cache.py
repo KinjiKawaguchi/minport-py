@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+from minport._module_locator import find_installed_origin
 from minport._persistent_cache import (
     PersistentSpecCache,
     default_cache_dir,
@@ -103,6 +104,17 @@ class TestPersistentSpecCache:
         assert hit
         assert value == target
 
+    def test_set_skips_when_file_vanished(self, tmp_path: Path) -> None:
+        cache = PersistentSpecCache(tmp_path / "cache")
+        try:
+            cache.set("ghost", tmp_path / "does-not-exist.py")
+            cache.flush()
+            hit, _ = cache.get("ghost")
+        finally:
+            cache.close()
+
+        assert not hit  # nothing was stored, since stat() raised OSError
+
     def test_minport_version_change_wipes_entries(self, tmp_path: Path) -> None:
         target = tmp_path / "old.py"
         target.write_text("x = 1\n")
@@ -125,10 +137,30 @@ class TestPersistentSpecCache:
         assert not hit
 
 
+class TestFindInstalledOriginWithCache:
+    def test_first_call_writes_to_cache(self, tmp_path: Path) -> None:
+        cache = PersistentSpecCache(tmp_path / "cache")
+        try:
+            # 'pytest' is installed in the dev env with a real .py origin.
+            # (Stdlib modules like 'os' are 'frozen' on 3.11+ and would be
+            # skipped by set() since Path('frozen').stat() raises OSError.)
+            result = find_installed_origin("pytest", cache=cache)
+            cache.flush()
+            hit, cached = cache.get("pytest")
+        finally:
+            cache.close()
+
+        assert result is not None
+        assert hit
+        assert cached == result
+
+
 class TestSpecCacheContextManager:
     def test_yields_none_when_disabled_via_env(self, tmp_path: Path) -> None:
-        with patch.dict(os.environ, {"MINPORT_NO_CACHE": "1"}, clear=False), \
-             spec_cache(tmp_path / "cache") as cache:
+        with (
+            patch.dict(os.environ, {"MINPORT_NO_CACHE": "1"}, clear=False),
+            spec_cache(tmp_path / "cache") as cache,
+        ):
             assert cache is None
 
     def test_yields_cache_normally(self, tmp_path: Path) -> None:
@@ -136,6 +168,15 @@ class TestSpecCacheContextManager:
             env.pop("MINPORT_NO_CACHE", None)
             with spec_cache(tmp_path / "cache") as cache:
                 assert isinstance(cache, PersistentSpecCache)
+
+    def test_yields_none_on_init_failure(self, tmp_path: Path) -> None:
+        # Pass a path under a regular file: mkdir fails with NotADirectoryError.
+        blocker = tmp_path / "regular-file"
+        blocker.write_text("x")
+        with patch.dict(os.environ, {}, clear=False) as env:
+            env.pop("MINPORT_NO_CACHE", None)
+            with spec_cache(blocker) as cache:
+                assert cache is None
 
 
 class TestDefaultCacheDir:
