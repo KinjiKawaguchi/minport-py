@@ -8,18 +8,18 @@ from unittest.mock import patch
 
 from minport._module_locator import find_installed_origin
 from minport._persistent_cache import (
-    PersistentSpecCache,
+    InstalledOriginCache,
     default_cache_dir,
-    spec_cache,
+    open_origin_cache,
 )
 
 
-class TestPersistentSpecCache:
+class TestInstalledOriginCache:
     def test_set_then_get_returns_cached_path(self, tmp_path: Path) -> None:
         target = tmp_path / "module.py"
         target.write_text("x = 1\n")
 
-        cache = PersistentSpecCache(tmp_path / "cache")
+        cache = InstalledOriginCache(tmp_path / "cache")
         try:
             cache.set("foo.bar", target)
             cache.flush()
@@ -31,7 +31,7 @@ class TestPersistentSpecCache:
         assert value == target
 
     def test_set_then_get_caches_none_result(self, tmp_path: Path) -> None:
-        cache = PersistentSpecCache(tmp_path / "cache")
+        cache = InstalledOriginCache(tmp_path / "cache")
         try:
             cache.set("nope.module", None)
             cache.flush()
@@ -43,7 +43,7 @@ class TestPersistentSpecCache:
         assert value is None
 
     def test_get_returns_miss_for_unknown_key(self, tmp_path: Path) -> None:
-        cache = PersistentSpecCache(tmp_path / "cache")
+        cache = InstalledOriginCache(tmp_path / "cache")
         try:
             hit, value = cache.get("never.cached")
         finally:
@@ -56,7 +56,7 @@ class TestPersistentSpecCache:
         target = tmp_path / "vanish.py"
         target.write_text("x = 1\n")
 
-        cache = PersistentSpecCache(tmp_path / "cache")
+        cache = InstalledOriginCache(tmp_path / "cache")
         try:
             cache.set("vanish", target)
             cache.flush()
@@ -72,7 +72,7 @@ class TestPersistentSpecCache:
         target = tmp_path / "modified.py"
         target.write_text("x = 1\n")
 
-        cache = PersistentSpecCache(tmp_path / "cache")
+        cache = InstalledOriginCache(tmp_path / "cache")
         try:
             cache.set("modified", target)
             cache.flush()
@@ -88,14 +88,14 @@ class TestPersistentSpecCache:
         target = tmp_path / "persist.py"
         target.write_text("x = 1\n")
 
-        c1 = PersistentSpecCache(tmp_path / "cache")
+        c1 = InstalledOriginCache(tmp_path / "cache")
         try:
             c1.set("persist", target)
             c1.flush()
         finally:
             c1.close()
 
-        c2 = PersistentSpecCache(tmp_path / "cache")
+        c2 = InstalledOriginCache(tmp_path / "cache")
         try:
             hit, value = c2.get("persist")
         finally:
@@ -105,7 +105,7 @@ class TestPersistentSpecCache:
         assert value == target
 
     def test_set_skips_when_file_vanished(self, tmp_path: Path) -> None:
-        cache = PersistentSpecCache(tmp_path / "cache")
+        cache = InstalledOriginCache(tmp_path / "cache")
         try:
             cache.set("ghost", tmp_path / "does-not-exist.py")
             cache.flush()
@@ -119,7 +119,7 @@ class TestPersistentSpecCache:
         target = tmp_path / "old.py"
         target.write_text("x = 1\n")
 
-        c1 = PersistentSpecCache(tmp_path / "cache")
+        c1 = InstalledOriginCache(tmp_path / "cache")
         try:
             c1.set("old", target)
             c1.flush()
@@ -128,7 +128,7 @@ class TestPersistentSpecCache:
 
         # Re-open after pretending minport upgraded.
         with patch("minport._persistent_cache._minport_version", "999.0.0"):
-            c2 = PersistentSpecCache(tmp_path / "cache")
+            c2 = InstalledOriginCache(tmp_path / "cache")
             try:
                 hit, _ = c2.get("old")
             finally:
@@ -139,7 +139,7 @@ class TestPersistentSpecCache:
 
 class TestFindInstalledOriginWithCache:
     def test_first_call_writes_to_cache(self, tmp_path: Path) -> None:
-        cache = PersistentSpecCache(tmp_path / "cache")
+        cache = InstalledOriginCache(tmp_path / "cache")
         try:
             # 'pytest' is installed in the dev env with a real .py origin.
             # (Stdlib modules like 'os' are 'frozen' on 3.11+ and would be
@@ -159,15 +159,15 @@ class TestSpecCacheContextManager:
     def test_yields_none_when_disabled_via_env(self, tmp_path: Path) -> None:
         with (
             patch.dict(os.environ, {"MINPORT_NO_CACHE": "1"}, clear=False),
-            spec_cache(tmp_path / "cache") as cache,
+            open_origin_cache(tmp_path / "cache") as cache,
         ):
             assert cache is None
 
     def test_yields_cache_normally(self, tmp_path: Path) -> None:
         with patch.dict(os.environ, {}, clear=False) as env:
             env.pop("MINPORT_NO_CACHE", None)
-            with spec_cache(tmp_path / "cache") as cache:
-                assert isinstance(cache, PersistentSpecCache)
+            with open_origin_cache(tmp_path / "cache") as cache:
+                assert isinstance(cache, InstalledOriginCache)
 
     def test_yields_none_on_init_failure(self, tmp_path: Path) -> None:
         # Pass a path under a regular file: mkdir fails with NotADirectoryError.
@@ -175,7 +175,7 @@ class TestSpecCacheContextManager:
         blocker.write_text("x")
         with patch.dict(os.environ, {}, clear=False) as env:
             env.pop("MINPORT_NO_CACHE", None)
-            with spec_cache(blocker) as cache:
+            with open_origin_cache(blocker) as cache:
                 assert cache is None
 
 

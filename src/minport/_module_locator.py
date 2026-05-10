@@ -5,7 +5,7 @@ survive third-party packages whose ``__init__.py`` raises unusual
 exceptions during import resolution. Also provides pure functions for
 deriving module-path strings (``module_chain``, ``resolve_relative``).
 
-An optional :class:`~minport._persistent_cache.PersistentSpecCache`
+An optional :class:`~minport._persistent_cache.InstalledOriginCache`
 short-circuits repeat lookups across runs.
 """
 
@@ -18,13 +18,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from minport._persistent_cache import PersistentSpecCache
+    from minport._persistent_cache import InstalledOriginCache
 
 
 def find_installed_source(
     module_path: str,
     *,
-    cache: PersistentSpecCache | None = None,
+    cache: InstalledOriginCache | None = None,
 ) -> Path | None:
     """Return the .py source file of an installed module, or None."""
     origin = find_installed_origin(module_path, cache=cache)
@@ -36,7 +36,7 @@ def find_installed_source(
 def find_installed_origin(
     module_path: str,
     *,
-    cache: PersistentSpecCache | None = None,
+    cache: InstalledOriginCache | None = None,
 ) -> Path | None:
     """Return any spec.origin of an installed module, or None."""
     if cache is not None:

@@ -8,7 +8,7 @@ import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from minport._persistent_cache import spec_cache as open_spec_cache
+from minport._persistent_cache import open_origin_cache
 from minport._progress import ProgressReporter
 from minport.checker import check
 
@@ -112,7 +112,7 @@ def _handle_check(args: argparse.Namespace) -> int:
         enabled=(not args.quiet and args.output_format != "github" and sys.stderr.isatty()),
     )
     try:
-        with open_spec_cache() as cache:
+        with open_origin_cache() as cache:
             check_result, fix_result = check(
                 paths,
                 src_roots=src_roots,
@@ -120,7 +120,7 @@ def _handle_check(args: argparse.Namespace) -> int:
                 extend_exclude=extend_exclude,
                 fix=args.fix,
                 progress=reporter.update,
-                spec_cache=cache,
+                installed_origin_cache=cache,
             )
     finally:
         reporter.close()

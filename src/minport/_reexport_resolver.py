@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
     from typing import NoReturn
 
-    from minport._persistent_cache import PersistentSpecCache
+    from minport._persistent_cache import InstalledOriginCache
 
 Origin = tuple[Path, str]
 
@@ -40,7 +40,7 @@ class ReexportResolver:
         self,
         src_roots: Sequence[Path],
         *,
-        spec_cache: PersistentSpecCache | None = None,
+        installed_origin_cache: InstalledOriginCache | None = None,
         on_parse: Callable[[Path], None] | None = None,
     ) -> None:
         self._src_roots = list(src_roots)
@@ -50,7 +50,7 @@ class ReexportResolver:
         self._loads_cache: dict[tuple[str, frozenset[str]], frozenset[Path]] = {}
         self._parse_cache: dict[Path, ast.Module | None] = {}
         self._source_file_cache: dict[str, Path | None] = {}
-        self._spec_cache = spec_cache  # cross-run cache; None disables it
+        self._installed_origin_cache = installed_origin_cache  # cross-run cache; None disables it
         self._on_parse = on_parse
 
     def find_shortest_path(
@@ -443,7 +443,7 @@ class ReexportResolver:
             module_file = root / Path(*parts[:-1]) / f"{parts[-1]}.py"
             if module_file.is_file():
                 return module_file
-        return find_installed_source(module_path, cache=self._spec_cache)
+        return find_installed_source(module_path, cache=self._installed_origin_cache)
 
     def _parse(self, path: Path) -> ast.Module | None:
         if path not in self._parse_cache:

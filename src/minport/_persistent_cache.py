@@ -39,7 +39,7 @@ _SCHEMA_VERSION = "1"
 _MISS: tuple[bool, Path | None] = (False, None)
 
 
-class PersistentSpecCache:
+class InstalledOriginCache:
     """SQLite cache for ``module_path → resolved file path | None``."""
 
     def __init__(self, root: Path) -> None:
@@ -165,7 +165,7 @@ def default_cache_dir() -> Path:
 
 
 @contextmanager
-def spec_cache(root: Path | None = None) -> Iterator[PersistentSpecCache | None]:
+def open_origin_cache(root: Path | None = None) -> Iterator[InstalledOriginCache | None]:
     """Context manager yielding a cache, or None when disabled or unavailable.
 
     Disabled when ``MINPORT_NO_CACHE`` is set. Initialization failure
@@ -178,7 +178,7 @@ def spec_cache(root: Path | None = None) -> Iterator[PersistentSpecCache | None]
     if root is None:
         root = default_cache_dir()
     try:
-        cache = PersistentSpecCache(root)
+        cache = InstalledOriginCache(root)
     except (OSError, sqlite3.Error):
         yield None
         return
