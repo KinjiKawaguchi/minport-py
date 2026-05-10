@@ -61,3 +61,8 @@ The runner reports median, min, max, stdev, and **`ms/file`**.
 
 Defaults (`--warmup 1 --runs 3`) prioritize iteration speed. For
 publication-quality numbers, use `--warmup 3 --runs 10`.
+
+`--parallel N` runs different targets concurrently to shorten total
+wall time during iteration. Per-target numbers degrade slightly under
+contention, so before/after comparisons must hold `--parallel` constant.
+Default is `1` (sequential).

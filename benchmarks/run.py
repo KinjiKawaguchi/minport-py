@@ -14,10 +14,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import statistics
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -127,6 +129,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument(
+        "--parallel",
+        "-p",
+        type=int,
+        default=1,
+        help=(
+            "Number of targets to measure concurrently (default: 1). "
+            "Higher values finish faster but introduce CPU/IO contention "
+            "between targets, so before/after comparisons must use the "
+            "same value."
+        ),
+    )
+    parser.add_argument(
         "--only",
         type=str,
         default=None,
@@ -151,14 +165,33 @@ def select_targets(args: argparse.Namespace) -> list[Target]:
     return targets
 
 
+def run_measurements(targets: list[Target], warmup: int, runs: int, parallel: int) -> list[Result]:
+    if parallel <= 1:
+        results: list[Result] = []
+        for t in targets:
+            sys.stderr.write(f"[measure] {t.name} ...\n")
+            results.append(measure(t, warmup, runs))
+        return results
+
+    workers = min(parallel, len(targets))
+    by_name: dict[str, Result] = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(measure, t, warmup, runs): t for t in targets}
+        for t in targets:
+            sys.stderr.write(f"[start] {t.name}\n")
+        for fut in as_completed(futures):
+            t = futures[fut]
+            by_name[t.name] = fut.result()
+            sys.stderr.write(f"[done]  {t.name}\n")
+    return [by_name[t.name] for t in targets]
+
+
 def main() -> None:
     args = parse_args()
     targets = select_targets(args)
-    print(f"warmup={args.warmup}  runs={args.runs}\n")
-    results = []
-    for t in targets:
-        sys.stderr.write(f"[measure] {t.name} ...\n")
-        results.append(measure(t, args.warmup, args.runs))
+    parallel = max(1, min(args.parallel, len(targets), os.cpu_count() or 1))
+    print(f"warmup={args.warmup}  runs={args.runs}  parallel={parallel}\n")
+    results = run_measurements(targets, args.warmup, args.runs, parallel)
     print()
     print_table(results)
 
