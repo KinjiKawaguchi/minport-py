@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from minport.cli import main
+from minport.cli import _resolve_cache_root, main
 
 
 class TestCLI:
@@ -589,3 +591,33 @@ class TestCLI:
         assert "a.py" not in captured.out
         assert "b.py" not in captured.out
         assert "c.py" in captured.out
+
+
+class TestResolveCacheRoot:
+    """Precedence order:
+    MINPORT_NO_CACHE > MINPORT_CACHE_DIR > XDG_CACHE_HOME > $HOME.
+    """
+
+    def test_returns_none_when_no_cache_set(self) -> None:
+        with patch.dict(os.environ, {"MINPORT_NO_CACHE": "1"}, clear=False):
+            assert _resolve_cache_root() is None
+
+    def test_minport_cache_dir_overrides(self, tmp_path: Path) -> None:
+        env = {"MINPORT_CACHE_DIR": str(tmp_path / "x")}
+        with patch.dict(os.environ, env, clear=False) as actual:
+            actual.pop("MINPORT_NO_CACHE", None)
+            assert _resolve_cache_root() == tmp_path / "x"
+
+    def test_xdg_cache_home_used_when_set(self, tmp_path: Path) -> None:
+        env = {"XDG_CACHE_HOME": str(tmp_path / "xdg")}
+        with patch.dict(os.environ, env, clear=False) as actual:
+            actual.pop("MINPORT_NO_CACHE", None)
+            actual.pop("MINPORT_CACHE_DIR", None)
+            assert _resolve_cache_root() == tmp_path / "xdg" / "minport"
+
+    def test_falls_back_to_home_cache(self, tmp_path: Path) -> None:
+        with patch.dict(os.environ, {"HOME": str(tmp_path)}, clear=False) as env:
+            env.pop("MINPORT_NO_CACHE", None)
+            env.pop("MINPORT_CACHE_DIR", None)
+            env.pop("XDG_CACHE_HOME", None)
+            assert _resolve_cache_root() == tmp_path / ".cache" / "minport"

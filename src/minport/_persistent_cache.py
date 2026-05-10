@@ -23,7 +23,6 @@ thread. Parallel resolution (issue #54) will add locking.
 from __future__ import annotations
 
 import hashlib
-import os
 import sqlite3
 import sys
 from contextlib import contextmanager
@@ -142,41 +141,17 @@ class InstalledOriginCache:
             )
 
 
-def default_cache_dir() -> Path:
-    """Return the default cache root.
-
-    Resolution order:
-    1. ``MINPORT_CACHE_DIR`` env var (explicit opt-in to a specific path)
-    2. ``XDG_CACHE_HOME/minport`` (XDG Base Directory spec)
-    3. ``~/.cache/minport`` (XDG default)
-
-    SQLite on NFS is dramatically slower than on local disk (file
-    locking overhead per syscall). Users on shared/NFS-mounted home
-    directories should set ``MINPORT_CACHE_DIR`` to a local-disk path
-    or set ``MINPORT_NO_CACHE=1`` to disable persistence entirely.
-    """
-    env = os.environ.get("MINPORT_CACHE_DIR")
-    if env:
-        return Path(env)
-    xdg = os.environ.get("XDG_CACHE_HOME")
-    if xdg:
-        return Path(xdg) / "minport"
-    return Path.home() / ".cache" / "minport"
-
-
 @contextmanager
-def open_origin_cache(root: Path | None = None) -> Iterator[InstalledOriginCache | None]:
+def open_origin_cache(root: Path | None) -> Iterator[InstalledOriginCache | None]:
     """Context manager yielding a cache, or None when disabled or unavailable.
 
-    Disabled when ``MINPORT_NO_CACHE`` is set. Initialization failure
-    (read-only fs, locked SQLite, etc.) also yields None so the check
-    run continues without persistence.
+    ``root=None`` disables persistence (caller's explicit signal).
+    Initialization failure (read-only fs, locked SQLite, etc.) also
+    yields None so the check run continues without persistence.
     """
-    if os.environ.get("MINPORT_NO_CACHE"):
+    if root is None:
         yield None
         return
-    if root is None:
-        root = default_cache_dir()
     try:
         cache = InstalledOriginCache(root)
     except (OSError, sqlite3.Error):

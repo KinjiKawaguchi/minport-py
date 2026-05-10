@@ -7,11 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from minport._module_locator import find_installed_origin
-from minport._persistent_cache import (
-    InstalledOriginCache,
-    default_cache_dir,
-    open_origin_cache,
-)
+from minport._persistent_cache import InstalledOriginCache, open_origin_cache
 
 
 class TestInstalledOriginCache:
@@ -155,43 +151,18 @@ class TestFindInstalledOriginWithCache:
         assert cached == result
 
 
-class TestSpecCacheContextManager:
-    def test_yields_none_when_disabled_via_env(self, tmp_path: Path) -> None:
-        with (
-            patch.dict(os.environ, {"MINPORT_NO_CACHE": "1"}, clear=False),
-            open_origin_cache(tmp_path / "cache") as cache,
-        ):
+class TestOpenOriginCacheContextManager:
+    def test_yields_none_when_root_is_none(self) -> None:
+        with open_origin_cache(None) as cache:
             assert cache is None
 
-    def test_yields_cache_normally(self, tmp_path: Path) -> None:
-        with patch.dict(os.environ, {}, clear=False) as env:
-            env.pop("MINPORT_NO_CACHE", None)
-            with open_origin_cache(tmp_path / "cache") as cache:
-                assert isinstance(cache, InstalledOriginCache)
+    def test_yields_cache_when_root_given(self, tmp_path: Path) -> None:
+        with open_origin_cache(tmp_path / "cache") as cache:
+            assert isinstance(cache, InstalledOriginCache)
 
     def test_yields_none_on_init_failure(self, tmp_path: Path) -> None:
         # Pass a path under a regular file: mkdir fails with NotADirectoryError.
         blocker = tmp_path / "regular-file"
         blocker.write_text("x")
-        with patch.dict(os.environ, {}, clear=False) as env:
-            env.pop("MINPORT_NO_CACHE", None)
-            with open_origin_cache(blocker) as cache:
-                assert cache is None
-
-
-class TestDefaultCacheDir:
-    def test_minport_cache_dir_env_overrides(self, tmp_path: Path) -> None:
-        with patch.dict(os.environ, {"MINPORT_CACHE_DIR": str(tmp_path / "x")}):
-            assert default_cache_dir() == tmp_path / "x"
-
-    def test_xdg_cache_home_used_when_set(self, tmp_path: Path) -> None:
-        env = {"XDG_CACHE_HOME": str(tmp_path / "xdg")}
-        with patch.dict(os.environ, env, clear=False) as actual_env:
-            actual_env.pop("MINPORT_CACHE_DIR", None)
-            assert default_cache_dir() == tmp_path / "xdg" / "minport"
-
-    def test_falls_back_to_home_cache(self, tmp_path: Path) -> None:
-        with patch.dict(os.environ, {"HOME": str(tmp_path)}, clear=False) as env:
-            env.pop("MINPORT_CACHE_DIR", None)
-            env.pop("XDG_CACHE_HOME", None)
-            assert default_cache_dir() == tmp_path / ".cache" / "minport"
+        with open_origin_cache(blocker) as cache:
+            assert cache is None
