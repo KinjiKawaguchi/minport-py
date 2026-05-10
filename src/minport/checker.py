@@ -23,29 +23,35 @@ from minport._reexport_resolver import ReexportResolver
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from minport._persistent_cache import PersistentSpecCache
+
 _INLINE_SUPPRESS = "minport: ignore"
 
 
-def check(
+def check(  # noqa: PLR0913 — config knobs grow naturally; bundling into a Config dataclass is a follow-up
     paths: Sequence[Path],
     *,
     src_roots: Sequence[Path] | None = None,
     exclude: Sequence[str] | None = None,
     extend_exclude: Sequence[str] = (),
     fix: bool = False,
+    spec_cache: PersistentSpecCache | None = None,
 ) -> tuple[CheckResult, FixResult | None]:
     """Run the full minport check on the given paths.
 
     When *exclude* is ``None`` (the default), :data:`DEFAULT_EXCLUDES` is used.
     Pass an explicit list to override the defaults entirely.
     *extend_exclude* patterns are always appended to the effective exclude list.
+
+    *spec_cache* enables cross-run memoization of installed-module
+    resolution. Pass ``None`` (the default) to disable persistence.
     """
     effective_src = list(src_roots) if src_roots else _infer_src_roots(paths)
     base_exclude = tuple(exclude) if exclude is not None else DEFAULT_EXCLUDES
     effective_exclude = (*base_exclude, *extend_exclude)
     files = _collect_files(paths, effective_exclude)
 
-    resolver = ReexportResolver(effective_src)
+    resolver = ReexportResolver(effective_src, spec_cache=spec_cache)
 
     parsed: dict[Path, ParsedFile] = {}
     skipped: list[tuple[Path, str]] = []

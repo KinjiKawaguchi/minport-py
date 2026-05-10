@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from minport._module_locator import find_installed_source
+from minport._module_locator import find_installed_source, module_chain, resolve_relative
 from minport._source_loader import safe_parse
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
     from typing import NoReturn
+
+    from minport._persistent_cache import PersistentSpecCache
 
 Origin = tuple[Path, str]
 
@@ -34,17 +36,20 @@ class _Binding:
 class ReexportResolver:
     """Find the shortest ``from X import Name`` path by walking re-exports."""
 
-    def __init__(self, src_roots: Sequence[Path]) -> None:
+    def __init__(
+        self,
+        src_roots: Sequence[Path],
+        *,
+        spec_cache: PersistentSpecCache | None = None,
+    ) -> None:
         self._src_roots = list(src_roots)
+        # In-process caches collapse duplicate work within a single check run.
         self._names_cache: dict[str, set[str]] = {}
         self._origin_cache: dict[tuple[str, str], Origin | None] = {}
         self._loads_cache: dict[tuple[str, frozenset[str]], frozenset[Path]] = {}
-        # Hot-path memoization. Resolution walks re-export chains, so the same
-        # module path and the same __init__.py file are revisited many times.
-        # Without these, projects with deep third-party graphs (langchain,
-        # numpy, urllib3) parse the same file hundreds of times per check run.
         self._parse_cache: dict[Path, ast.Module | None] = {}
         self._source_file_cache: dict[str, Path | None] = {}
+        self._spec_cache = spec_cache  # cross-run cache; None disables it
 
     def find_shortest_path(
         self,
@@ -342,7 +347,7 @@ class ReexportResolver:
         if binding.is_definition:
             return (source_file, name)
 
-        abs_module = _resolve_relative_module(
+        abs_module = resolve_relative(
             module_path,
             binding.target_module,
             binding.level,
@@ -436,7 +441,7 @@ class ReexportResolver:
             module_file = root / Path(*parts[:-1]) / f"{parts[-1]}.py"
             if module_file.is_file():
                 return module_file
-        return find_installed_source(module_path)
+        return find_installed_source(module_path, cache=self._spec_cache)
 
     def _parse(self, path: Path) -> ast.Module | None:
         if path not in self._parse_cache:
@@ -622,7 +627,7 @@ def _find_wildcard_targets(
         if not any(alias.name == "*" for alias in node.names):
             continue
         target_mod = node.module or ""
-        resolved = _resolve_relative_module(
+        resolved = resolve_relative(
             current_module,
             target_mod,
             node.level,
@@ -740,7 +745,7 @@ def _iter_runtime_load_targets(
             )
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                yield from _module_chain(alias.name)
+                yield from module_chain(alias.name)
 
 
 def _load_targets_from_node(
@@ -750,7 +755,7 @@ def _load_targets_from_node(
     is_package: bool,
 ) -> Iterator[str]:
     """Yield module paths that *node* causes Python to load."""
-    resolved = _resolve_relative_module(
+    resolved = resolve_relative(
         current_module,
         node.module or "",
         node.level,
@@ -758,43 +763,11 @@ def _load_targets_from_node(
     )
     if not resolved:
         return
-    yield from _module_chain(resolved)
+    yield from module_chain(resolved)
     for alias in node.names:
         if alias.name != "*":
             yield f"{resolved}.{alias.name}"
 
 
-def _module_chain(module_path: str) -> Iterator[str]:
-    """Yield *module_path* and every ancestor package it would trigger."""
-    parts = module_path.split(".")
-    for i in range(1, len(parts) + 1):
-        yield ".".join(parts[:i])
 
 
-def _resolve_relative_module(
-    current_module: str,
-    target: str,
-    level: int,
-    *,
-    is_package: bool,
-) -> str | None:
-    """Convert a possibly-relative import to an absolute dotted path.
-
-    ``level`` follows Python semantics: ``0`` means an absolute import, ``1``
-    means the current package, ``2`` means its parent, and so on. When the
-    current file is a module (not a package), ``level=1`` already refers to
-    the parent package. An empty *target* is allowed (``from .. import *``)
-    and resolves to just the base package.
-    """
-    if level == 0:
-        return target or None
-
-    parts = current_module.split(".") if current_module else []
-    up = level - 1 if is_package else level
-    if up >= len(parts):
-        return None
-
-    base = parts[: len(parts) - up] if up > 0 else parts
-    target_parts = target.split(".") if target else []
-    combined = [*base, *target_parts]
-    return ".".join(combined) if combined else None
