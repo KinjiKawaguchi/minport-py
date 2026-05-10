@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from minport._progress import ProgressReporter, ProgressTracker
+from minport._progress import ProgressReporter, ProgressTracker, _default_terminal_width
 from minport.cli import main
 
 if TYPE_CHECKING:
@@ -176,9 +176,7 @@ class TestProgressReporter:
         assert "\x1b[2m" in out  # dim suffix
         assert "\x1b[32m" in out  # green filled bar
 
-    def test_no_color_env_disables_color(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_no_color_env_disables_color(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("NO_COLOR", "1")
         stream = _FakeTTY()
         reporter = ProgressReporter(
@@ -190,6 +188,13 @@ class TestProgressReporter:
         reporter.update(50, 100)
         assert "\x1b[36m" not in stream.getvalue()
         assert "\x1b[32m" not in stream.getvalue()
+
+
+class TestDefaultTerminalWidth:
+    def test_returns_positive_int(self) -> None:
+        width = _default_terminal_width()
+        assert isinstance(width, int)
+        assert width > 0
 
 
 class TestElapsedFormatting:

@@ -108,9 +108,7 @@ def _handle_check(args: argparse.Namespace) -> int:
 
     reporter = ProgressReporter(
         stream=sys.stderr,
-        enabled=(
-            not args.quiet and args.output_format != "github" and sys.stderr.isatty()
-        ),
+        enabled=(not args.quiet and args.output_format != "github" and sys.stderr.isatty()),
     )
     try:
         check_result, fix_result = check(
