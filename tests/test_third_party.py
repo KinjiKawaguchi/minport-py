@@ -5,7 +5,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from minport._reexport_resolver import ReexportResolver, _find_installed_origin
+from minport._module_locator import find_installed_origin
+from minport._reexport_resolver import ReexportResolver
 from minport.checker import check
 
 
@@ -85,7 +86,7 @@ class TestThirdPartyResolution:
 
         monkeypatch.setattr(importlib.util, "find_spec", raising_find_spec)
         # Must not raise; should return None (module treated as unresolvable).
-        assert _find_installed_origin("anything.at.all") is None
+        assert find_installed_origin("anything.at.all") is None
 
     def test_find_installed_origin_swallows_oserror(
         self,
@@ -98,7 +99,7 @@ class TestThirdPartyResolution:
             raise OSError(msg)
 
         monkeypatch.setattr(importlib.util, "find_spec", raising_find_spec)
-        assert _find_installed_origin("anything") is None
+        assert find_installed_origin("anything") is None
 
     def test_third_party_import_in_check(self, tmp_path: Path) -> None:
         """Test: check() handles third-party imports correctly."""
