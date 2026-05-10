@@ -92,6 +92,14 @@ CLI arguments override `pyproject.toml` settings.
 
 minport automatically skips common non-source directories (`.venv`, `__pycache__`, `.git`, `node_modules`, `dist`, `site-packages`, etc.). Use `--exclude` to override these defaults entirely, or `--extend-exclude` to add patterns on top of them.
 
+### Environment Variables
+
+| Variable | Effect |
+|---|---|
+| `MINPORT_NO_CACHE=1` | Skip the persistent `find_spec` cache (same as `--no-cache`). |
+| `MINPORT_CACHE_DIR=<path>` | Override the cache root. Defaults to `$XDG_CACHE_HOME/minport` or `~/.cache/minport`. |
+| `XDG_CACHE_HOME=<path>` | Standard XDG base dir; minport stores the cache under `<path>/minport`. |
+
 ## Rules
 
 | Code | Name | Description | Fixable |
