@@ -11,7 +11,7 @@ from minport._module_locator import find_installed_source
 from minport._source_loader import safe_parse
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence
     from typing import NoReturn
 
 Origin = tuple[Path, str]
@@ -34,7 +34,12 @@ class _Binding:
 class ReexportResolver:
     """Find the shortest ``from X import Name`` path by walking re-exports."""
 
-    def __init__(self, src_roots: Sequence[Path]) -> None:
+    def __init__(
+        self,
+        src_roots: Sequence[Path],
+        *,
+        on_parse: Callable[[Path], None] | None = None,
+    ) -> None:
         self._src_roots = list(src_roots)
         self._names_cache: dict[str, set[str]] = {}
         self._origin_cache: dict[tuple[str, str], Origin | None] = {}
@@ -45,6 +50,7 @@ class ReexportResolver:
         # numpy, urllib3) parse the same file hundreds of times per check run.
         self._parse_cache: dict[Path, ast.Module | None] = {}
         self._source_file_cache: dict[str, Path | None] = {}
+        self._on_parse = on_parse
 
     def find_shortest_path(
         self,
@@ -441,6 +447,8 @@ class ReexportResolver:
     def _parse(self, path: Path) -> ast.Module | None:
         if path not in self._parse_cache:
             self._parse_cache[path] = safe_parse(path)
+            if self._on_parse is not None:
+                self._on_parse(path)
         return self._parse_cache[path]
 
 
