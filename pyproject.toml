@@ -37,6 +37,17 @@ packages = ["src/minport"]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-cov>=6.0", "ruff>=0.12", "ty>=0.0.1", "pip-audit>=2.0", "pre-commit>=4.0"]
+# Installed only when running benchmarks. Each entry matches the cloned
+# source tag in benchmarks/setup.py so find_spec resolves against the
+# same version of the package whose source minport is scanning.
+benchmarks = [
+    "requests==2.32.3",
+    "flask==3.0.3",
+    "django==5.1.4",
+    "pandas==2.2.3",
+    "sympy==1.13.3",
+    "langgraph==1.1.9",
+]
 
 [tool.ruff]
 target-version = "py311"
