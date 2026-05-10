@@ -17,3 +17,4 @@ htmlcov/
 *.so
 .mypy_cache/
 .pyright/
+benchmarks/.cache/
