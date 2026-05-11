@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import sys
 import tomllib
@@ -122,7 +123,10 @@ def _handle_check(args: argparse.Namespace) -> int:
         enabled=(not args.quiet and args.output_format != "github" and sys.stderr.isatty()),
     )
     try:
-        with open_origin_cache(_resolve_cache_root(no_cache=args.no_cache)) as cache:
+        with open_origin_cache(
+            _resolve_cache_root(no_cache=args.no_cache),
+            _resolve_cache_scope_key(),
+        ) as cache:
             check_result, fix_result = check(
                 paths,
                 src_roots=src_roots,
@@ -167,6 +171,44 @@ def _resolve_cache_root(*, no_cache: bool = False) -> Path | None:
     if xdg:
         return Path(xdg) / "minport"
     return Path.home() / ".cache" / "minport"
+
+
+_LOCK_CANDIDATES: tuple[str, ...] = (
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "requirements.lock",
+    "requirements.txt",
+    "pyproject.toml",
+)
+
+
+def _resolve_cache_scope_key() -> str:
+    """Derive a string identifying the current Python env + dep state.
+
+    The persistent cache is keyed on this. When dependencies change,
+    the project's lock file changes, this string changes, and the next
+    cache lookup uses a fresh file — implicitly invalidating stale
+    resolutions without paying for per-entry ``stat()``.
+
+    Composition: ``sys.executable`` plus, if present, the content hash
+    of each well-known lock file under the current working directory.
+    Files are tried in order; only the first present one contributes,
+    to keep the key stable when projects have both ``uv.lock`` and
+    ``pyproject.toml``.
+    """
+    parts = [sys.executable]
+    for name in _LOCK_CANDIDATES:
+        path = Path(name)
+        if not path.is_file():
+            continue
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        parts.append(f"{name}:{digest}")
+        break
+    return "|".join(parts)
 
 
 def _load_config(config_path: Path | None) -> dict[str, object]:

@@ -100,6 +100,8 @@ minport automatically skips common non-source directories (`.venv`, `__pycache__
 | `MINPORT_CACHE_DIR=<path>` | Override the cache root. Defaults to `$XDG_CACHE_HOME/minport` or `~/.cache/minport`. |
 | `XDG_CACHE_HOME=<path>` | Standard XDG base dir; minport stores the cache under `<path>/minport`. |
 
+The persistent cache is invalidated by content hash of the project's lock file (`uv.lock`, `poetry.lock`, `Pipfile.lock`, `requirements.lock`, `requirements.txt`, or `pyproject.toml` — first one found, in that order). Changing dependencies switches the cache to a fresh file; the previous one is left untouched.
+
 ## Rules
 
 | Code | Name | Description | Fixable |
