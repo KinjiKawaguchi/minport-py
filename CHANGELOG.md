@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/KinjiKawaguchi/minport-py/compare/v0.3.0...v0.3.1) (2026-05-11)
+
+
+### Performance Improvements
+
+* **cache:** drop per-entry mtime stat, key cache by lock-hash ([#70](https://github.com/KinjiKawaguchi/minport-py/issues/70)) ([81cd5b7](https://github.com/KinjiKawaguchi/minport-py/commit/81cd5b790d88445d0141a883c15831768a7d2095))
+* **resolver:** skip circular-import BFS for third-party candidates ([#68](https://github.com/KinjiKawaguchi/minport-py/issues/68)) ([8621463](https://github.com/KinjiKawaguchi/minport-py/commit/86214633d0cc4683443a101131f6aefcea5d804c))
+
 ## [0.3.0](https://github.com/KinjiKawaguchi/minport-py/compare/v0.2.0...v0.3.0) (2026-05-10)
 
 
