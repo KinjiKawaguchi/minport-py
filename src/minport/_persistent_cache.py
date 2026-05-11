@@ -19,14 +19,24 @@ WSL2 cross-mount), making the cache slower than no cache at all.
 Two syscalls per run sidesteps that entirely.
 
 Invalidation:
-- Per-entry: cached ``resolved_path`` is verified to still exist with
-  the same ``mtime``; otherwise treated as a miss.
-- Whole-cache: a schema-version + minport-version recorded in the
-  JSON envelope. Any mismatch is treated as an empty cache.
 
-Layout: ``<root>/find_spec/<sha256(python_executable)[:16]>.json``.
-The per-venv filename means switching venvs creates a fresh cache
-without invalidating others.
+The cache is invalidated **coarsely** by the ``scope_key`` argument:
+whenever the caller's notion of "current Python environment + dep
+set" changes, they supply a different ``scope_key`` and the new
+cache file replaces the old. This avoids the per-entry ``stat()``
+that a finer-grained mtime check would require — a per-entry ``stat``
+adds up to seconds of disk I/O on cold filesystems (CI runners, NFS).
+
+Concretely: callers should derive ``scope_key`` from
+``sys.executable`` plus the content hash of the project's lock file
+(``uv.lock`` / ``requirements*.txt`` / etc). When dependencies change,
+the lock file changes, ``scope_key`` changes, and the cache is
+implicitly invalidated.
+
+Schema- and minport-version mismatches in the JSON envelope also
+trigger a full reload as empty.
+
+Layout: ``<root>/find_spec/<sha256(scope_key)[:16]>.json``.
 
 Not thread-safe; in-memory dict access is not synchronized. Parallel
 resolution (issue #54) will add locking.
@@ -36,7 +46,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -46,11 +55,10 @@ if TYPE_CHECKING:
 
 from minport import __version__ as _minport_version
 
-_SCHEMA_VERSION = "2"
+_SCHEMA_VERSION = "3"
 _MISS: tuple[bool, Path | None] = (False, None)
-# Stored value: (resolved_path_str_or_None, file_mtime).
-_Entry = tuple[str | None, float]
-_ENTRY_FIELDS = 2  # serialized entries are [path_or_null, mtime]
+# Stored value is just the resolved path string (or None for negative cache).
+_Entry = str | None
 
 
 class InstalledOriginCache:
@@ -60,45 +68,26 @@ class InstalledOriginCache:
     written once on close. Per-operation cost is in memory.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, scope_key: str) -> None:
         cache_dir = root / "find_spec"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        venv_hash = hashlib.sha256(sys.executable.encode()).hexdigest()[:16]
-        self._path = cache_dir / f"{venv_hash}.json"
+        scope_hash = hashlib.sha256(scope_key.encode()).hexdigest()[:16]
+        self._path = cache_dir / f"{scope_hash}.json"
         self._entries: dict[str, _Entry] = {}
         self._load()
 
     def get(self, module_path: str) -> tuple[bool, Path | None]:
         """Return (hit, resolved_path). hit=False means caller must compute."""
-        entry = self._entries.get(module_path)
-        if entry is None:
+        if module_path not in self._entries:
             return _MISS
-        resolved_str, cached_mtime = entry
-        if resolved_str is None:
+        path_str = self._entries[module_path]
+        if path_str is None:
             return (True, None)
-        resolved = Path(resolved_str)
-        # Verify the resolved file still exists with the same mtime; otherwise
-        # treat as miss so the caller refreshes the entry.
-        try:
-            current_mtime = resolved.stat().st_mtime
-        except OSError:
-            return _MISS
-        if current_mtime != cached_mtime:
-            return _MISS
-        return (True, resolved)
+        return (True, Path(path_str))
 
     def set(self, module_path: str, resolved: Path | None) -> None:
         """Record an entry in memory; persisted by ``flush``/``close``."""
-        mtime = 0.0
-        if resolved is not None:
-            try:
-                mtime = resolved.stat().st_mtime
-            except OSError:
-                # File vanished between resolution and caching; skip storing
-                # rather than caching a doomed entry.
-                return
-        path_str = str(resolved) if resolved is not None else None
-        self._entries[module_path] = (path_str, mtime)
+        self._entries[module_path] = str(resolved) if resolved is not None else None
 
     def flush(self) -> None:
         """Write the in-memory entries to disk atomically.
@@ -110,7 +99,7 @@ class InstalledOriginCache:
         envelope = {
             "schema_version": _SCHEMA_VERSION,
             "minport_version": _minport_version,
-            "entries": {k: list(v) for k, v in self._entries.items()},
+            "entries": self._entries,
         }
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
         try:
@@ -130,9 +119,8 @@ class InstalledOriginCache:
         if raw_entries is None:
             return
         for key, value in raw_entries.items():
-            entry = _coerce_entry(key, value)
-            if entry is not None:
-                self._entries[key] = entry
+            if value is None or isinstance(value, str):
+                self._entries[key] = value
 
 
 def _read_envelope(path: Path) -> dict[str, object] | None:
@@ -156,26 +144,11 @@ def _read_envelope(path: Path) -> dict[str, object] | None:
     return raw
 
 
-def _coerce_entry(key: str, value: object) -> _Entry | None:
-    """Validate a single deserialized entry; return None if malformed.
-
-    JSON guarantees ``key`` is a ``str``; the surrounding ``dict`` shape
-    is verified before this is called, so only the ``value`` side needs
-    validation.
-    """
-    del key  # signature kept symmetrical with caller iteration
-    if not isinstance(value, list) or len(value) != _ENTRY_FIELDS:
-        return None
-    path_value, mtime = value
-    if path_value is not None and not isinstance(path_value, str):
-        return None
-    if not isinstance(mtime, (int, float)):
-        return None
-    return (path_value, float(mtime))
-
-
 @contextmanager
-def open_origin_cache(root: Path | None) -> Iterator[InstalledOriginCache | None]:
+def open_origin_cache(
+    root: Path | None,
+    scope_key: str,
+) -> Iterator[InstalledOriginCache | None]:
     """Context manager yielding a cache, or None when disabled or unavailable.
 
     ``root=None`` disables persistence (caller's explicit signal).
@@ -186,7 +159,7 @@ def open_origin_cache(root: Path | None) -> Iterator[InstalledOriginCache | None
         yield None
         return
     try:
-        cache = InstalledOriginCache(root)
+        cache = InstalledOriginCache(root, scope_key)
     except OSError:
         yield None
         return

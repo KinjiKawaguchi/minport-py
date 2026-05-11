@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from minport.cli import _resolve_cache_root, main
+from minport.cli import _resolve_cache_root, _resolve_cache_scope_key, main
 
 
 class TestCLI:
@@ -626,3 +627,65 @@ class TestResolveCacheRoot:
             env.pop("MINPORT_CACHE_DIR", None)
             env.pop("XDG_CACHE_HOME", None)
             assert _resolve_cache_root() == tmp_path / ".cache" / "minport"
+
+
+class TestResolveCacheScopeKey:
+    """``_resolve_cache_scope_key`` derives the cache invalidation key from
+    ``sys.executable`` plus the content hash of the first available lock
+    file under the current working directory.
+    """
+
+    def test_includes_uv_lock_when_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "uv.lock").write_text("locked-deps\n")
+        monkeypatch.chdir(tmp_path)
+        key = _resolve_cache_scope_key()
+        assert "uv.lock" in key
+        # The hash should be stable across calls for unchanged content.
+        assert _resolve_cache_scope_key() == key
+
+    def test_lock_content_change_changes_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        lock = tmp_path / "uv.lock"
+        lock.write_text("v1\n")
+        monkeypatch.chdir(tmp_path)
+        key_before = _resolve_cache_scope_key()
+        lock.write_text("v2\n")
+        key_after = _resolve_cache_scope_key()
+        assert key_before != key_after
+
+    def test_falls_back_to_pyproject_when_no_lock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+        monkeypatch.chdir(tmp_path)
+        key = _resolve_cache_scope_key()
+        assert "pyproject.toml" in key
+
+    def test_no_lock_files_yields_executable_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        key = _resolve_cache_scope_key()
+        assert key == sys.executable
+
+    def test_unreadable_lock_is_skipped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Make the lock file unreadable by replacing read_bytes with a raising stub.
+        (tmp_path / "uv.lock").write_text("content\n")
+        monkeypatch.chdir(tmp_path)
+        original = Path.read_bytes
+
+        def boom(self: Path) -> bytes:
+            if self.name == "uv.lock":
+                msg = "permission denied"
+                raise OSError(msg)
+            return original(self)
+
+        monkeypatch.setattr(Path, "read_bytes", boom)
+        key = _resolve_cache_scope_key()
+        # uv.lock is skipped; falls back to whatever else is present (none here).
+        assert "uv.lock" not in key
