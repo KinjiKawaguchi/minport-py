@@ -727,16 +727,16 @@ class TestLoadsFileHeuristic:
         resolver = ReexportResolver([src])
 
         # Verify the heuristic triggers for an installed third-party module
-        # (pytest is installed in the dev env). Spy on _transitive_loads to
+        # (pytest is installed in the dev env). Spy on _loads_target to
         # confirm it is NOT called when the heuristic kicks in.
-        bfs_calls: list[tuple[str, frozenset[str]]] = []
-        original = resolver._transitive_loads
+        bfs_calls: list[tuple[str, Path, frozenset[str]]] = []
+        original = resolver._loads_target
 
-        def spy(module_path: str, skip: frozenset[str]) -> frozenset[Path]:
-            bfs_calls.append((module_path, skip))
-            return original(module_path, skip)
+        def spy(module_path: str, target_resolved: Path, skip: frozenset[str]) -> bool:
+            bfs_calls.append((module_path, target_resolved, skip))
+            return original(module_path, target_resolved, skip)
 
-        monkeypatch.setattr(resolver, "_transitive_loads", spy)
+        monkeypatch.setattr(resolver, "_loads_target", spy)
 
         result = resolver.loads_file("pytest", user_file)
 
@@ -756,14 +756,14 @@ class TestLoadsFileHeuristic:
 
         resolver = ReexportResolver([src])
 
-        bfs_calls: list[tuple[str, frozenset[str]]] = []
-        original = resolver._transitive_loads
+        bfs_calls: list[tuple[str, Path, frozenset[str]]] = []
+        original = resolver._loads_target
 
-        def spy(module_path: str, skip: frozenset[str]) -> frozenset[Path]:
-            bfs_calls.append((module_path, skip))
-            return original(module_path, skip)
+        def spy(module_path: str, target_resolved: Path, skip: frozenset[str]) -> bool:
+            bfs_calls.append((module_path, target_resolved, skip))
+            return original(module_path, target_resolved, skip)
 
-        monkeypatch.setattr(resolver, "_transitive_loads", spy)
+        monkeypatch.setattr(resolver, "_loads_target", spy)
 
         resolver.loads_file("pkg_b", user_file)
 
@@ -877,3 +877,14 @@ class TestLoadsFileHeuristic:
 
         monkeypatch.setattr(Path, "resolve", maybe_raise)
         assert resolver._is_user_code("other.module") is True
+
+
+class TestTransitiveLoadsCache:
+    def test_second_call_hits_cache(self, tmp_path: Path) -> None:
+        src = tmp_path / "src"
+        (src / "pkg").mkdir(parents=True)
+        (src / "pkg" / "__init__.py").write_text("")
+        resolver = ReexportResolver([src])
+        first = resolver._transitive_loads("pkg", frozenset())
+        second = resolver._transitive_loads("pkg", frozenset())
+        assert first is second  # same frozenset instance from cache

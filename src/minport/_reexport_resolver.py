@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import sys
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -53,6 +54,10 @@ class ReexportResolver:
         self._source_file_cache: dict[str, Path | None] = {}
         self._installed_origin_cache = installed_origin_cache  # cross-run cache; None disables it
         self._on_parse = on_parse
+        # Reachability cache for circular-import checks. Stores
+        # ``(candidate, target, skip) → bool``; populated by ``_loads_target``
+        # which short-circuits the BFS as soon as ``target`` is reached.
+        self._reaches_cache: dict[tuple[str, Path, frozenset[str]], bool] = {}
 
     def find_shortest_path(
         self,
@@ -133,10 +138,18 @@ class ReexportResolver:
         if not self._is_user_code(module_path):
             return False
         target_module = self._file_to_module(target_file)
+        # Trivial-self short-circuit: when the candidate IS the target's own
+        # module, loading the candidate by definition loads target_file. Skip
+        # the BFS, which would otherwise enumerate the candidate's entire
+        # transitive load set just to confirm this. Measured impact: a single
+        # input ``__init__.py`` re-exporting a deeply-nested name produced a
+        # ~16s walk of 3,400+ files to derive what's a one-line truism.
+        if module_path == target_module:
+            return True
         ancestors = self._ancestor_packages_of_file(target_file)
-        candidate_is_ancestor = module_path == target_module or module_path in ancestors
+        candidate_is_ancestor = module_path in ancestors
         skip = frozenset() if candidate_is_ancestor else ancestors
-        return target_resolved in self._transitive_loads(module_path, skip)
+        return self._loads_target(module_path, target_resolved, skip)
 
     def _is_user_code(self, module_path: str) -> bool:
         """Decide whether the circular-import BFS for *module_path* is needed.
@@ -192,16 +205,59 @@ class ReexportResolver:
         Modules listed in *skip_modules* are treated as already-loaded (their
         ``__init__.py`` is not processed). This models Python's behavior
         where a module in ``sys.modules`` is not re-initialized.
+
+        Performs a full enumeration. ``loads_file`` does not use this
+        directly — it calls ``_loads_target`` which terminates the walk on
+        the first hit. The full-enumeration variant is retained as a
+        primitive for callers who need the complete load set.
         """
         cache_key = (module_path, skip_modules)
         if cache_key in self._loads_cache:
             return self._loads_cache[cache_key]
         self._loads_cache[cache_key] = frozenset()
-        loaded: set[Path] = set()
+        result = frozenset(self._walk_loads(module_path, skip_modules))
+        self._loads_cache[cache_key] = result
+        return result
+
+    def _loads_target(
+        self,
+        module_path: str,
+        target_resolved: Path,
+        skip_modules: frozenset[str],
+    ) -> bool:
+        """Return True if *target_resolved* is reachable from *module_path*.
+
+        Terminates the walk as soon as a match is found, so the cost is
+        O(distance to target) on hits rather than O(closure size). Misses
+        still pay full enumeration but populate the cache.
+        """
+        cache_key = (module_path, target_resolved, skip_modules)
+        cached = self._reaches_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        for resolved in self._walk_loads(module_path, skip_modules):
+            if resolved == target_resolved:
+                self._reaches_cache[cache_key] = True
+                return True
+        self._reaches_cache[cache_key] = False
+        return False
+
+    def _walk_loads(
+        self,
+        module_path: str,
+        skip_modules: frozenset[str],
+    ) -> Iterator[Path]:
+        """Yield each resolved file in the transitive load set of *module_path*.
+
+        Breadth-first so direct children are visited before deep descendants;
+        this matters for ``_loads_target``, which often finds the answer in
+        one of the candidate's immediate children. Shared between
+        ``_transitive_loads`` (full enumeration) and ``_loads_target``.
+        """
         visited: set[str] = set()
-        stack: list[str] = [module_path]
-        while stack:
-            current = stack.pop()
+        queue: deque[str] = deque([module_path])
+        while queue:
+            current = queue.popleft()
             if current in visited or current in skip_modules:
                 continue
             visited.add(current)
@@ -209,14 +265,15 @@ class ReexportResolver:
             if source_file is None:
                 continue
             try:
-                loaded.add(source_file.resolve())
+                resolved = source_file.resolve()
             except OSError:
                 continue
+            yield resolved
             tree = self._parse(source_file)
             if tree is None:
                 continue
             is_package = source_file.name == "__init__.py"
-            stack.extend(
+            queue.extend(
                 imported
                 for imported in _iter_runtime_load_targets(
                     tree,
@@ -225,9 +282,6 @@ class ReexportResolver:
                 )
                 if imported not in visited and imported not in skip_modules
             )
-        result = frozenset(loaded)
-        self._loads_cache[cache_key] = result
-        return result
 
     def _ancestor_packages_of_file(self, file_path: Path) -> frozenset[str]:
         """Return the dotted module paths of *file_path*'s ancestor packages."""
