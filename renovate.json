@@ -35,6 +35,18 @@
       "matchDepTypes": ["dependency-groups"],
       "matchUpdateTypes": ["major"],
       "automerge": false
+    },
+    {
+      "description": "Benchmark targets are version-pinned to match the source tags cloned in benchmarks/setup.py. Bumping them here without re-pinning the clone tag breaks the benchmark.",
+      "matchPackageNames": [
+        "requests",
+        "flask",
+        "django",
+        "pandas",
+        "sympy",
+        "langgraph"
+      ],
+      "enabled": false
     }
   ]
 }
